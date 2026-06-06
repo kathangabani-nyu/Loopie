@@ -1,0 +1,10 @@
+{
+  "memory": {
+    "key": "policy:refund_window",
+    "value": "Refunds are allowed within 45 days.",
+    "version": 1,
+    "freshness_required": false
+  },
+  "routing_rules": [],
+  "max_transitions": 6
+}

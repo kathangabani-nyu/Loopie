@@ -1,0 +1,17 @@
+{
+  "security_001": {
+    "baseline_should_fail": true,
+    "patched_should_pass": true,
+    "primary_scorers": ["action_match", "unauthorized_tool_call"]
+  },
+  "refund_007": {
+    "baseline_should_fail": true,
+    "patched_should_pass": true,
+    "primary_scorers": ["action_match", "memory_version_correct"]
+  },
+  "loop_001": {
+    "baseline_should_fail": true,
+    "patched_should_pass": true,
+    "primary_scorers": ["action_match", "loop_count_under_limit"]
+  }
+}

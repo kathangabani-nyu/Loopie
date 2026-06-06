@@ -1,0 +1,12 @@
+{
+  "python_version": "3.12",
+  "dockerfile_lines": [],
+  "dependencies": ["."],
+  "package_manager": "uv",
+  "graphs": {
+    "sample_agent": "./main.py:graph",
+    "loopie_swarm": "./loopie_graph.py:graph",
+    "loopie_control": "./loopie_control.py:graph"
+  },
+  "env": "../.env"
+}

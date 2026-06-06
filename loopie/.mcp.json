@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "loopie-local": {
+      "type": "http",
+      "url": "${LOOPIE_API_BASE:-http://localhost:8000}/mcp"
+    },
+    "redis-local": {
+      "command": "uvx",
+      "args": ["mcp-redis"],
+      "env": {
+        "REDIS_URL": "${REDIS_URL:-redis://localhost:6379}"
+      }
+    }
+  }
+}
