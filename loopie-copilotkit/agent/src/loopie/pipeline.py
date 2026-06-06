@@ -20,7 +20,11 @@ class LoopiePipeline:
         self.redis = RedisStore()
         self.ledger = Ledger.connect()
         self.settings = get_settings()
-        self.state: dict[str, Any] = {
+        self.state: dict[str, Any] = self._initial_state()
+
+    @staticmethod
+    def _initial_state() -> dict[str, Any]:
+        return {
             "runs": {},
             "currentFailure": None,
             "proposedCorrections": [],
@@ -31,6 +35,17 @@ class LoopiePipeline:
             "budget": {},
             "approvalState": "idle",
         }
+
+    def reset(self) -> dict[str, Any]:
+        """Wipe Redis + ledger back to a clean slate and reseed baseline artifacts.
+
+        Lets every demo rehearsal/recording start identical (memory v1, no guard).
+        """
+        self.redis.flush_loopie_keys()
+        self.ledger.reset()
+        self.state = self._initial_state()
+        seeded = self.seed()
+        return {"reset": True, **seeded}
 
     def seed(self) -> dict[str, Any]:
         result = seed_baseline(redis=self.redis, ledger=self.ledger)
@@ -141,5 +156,9 @@ class LoopiePipeline:
         }
 
     def export_state(self) -> dict[str, Any]:
-        self.state["events"] = self.redis.xread_recent("swarm") + self.redis.xread_recent("corrections")
+        self.state["events"] = (
+            self.redis.xread_recent("evals")
+            + self.redis.xread_recent("swarm")
+            + self.redis.xread_recent("corrections")
+        )
         return self.state

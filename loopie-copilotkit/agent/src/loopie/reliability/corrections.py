@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -65,6 +66,66 @@ def propose(failure_category: str, *, case_id: str) -> dict[str, Any]:
     }
 
 
+def _latest_version(history: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not history:
+        return None
+    return max(history, key=lambda row: row["version"])
+
+
+def _value_of(row: dict[str, Any]) -> Any:
+    value = row.get("value")
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _commit_artifact(
+    *,
+    ledger: Ledger,
+    redis: RedisStore,
+    artifact_key: str,
+    new_value: dict[str, Any],
+    correction: dict[str, Any],
+    event: str,
+) -> dict[str, Any]:
+    """Append a new artifact version only when the value actually changed.
+
+    Re-approving a correction whose value already matches the active version is a
+    no-op: it must not mint a duplicate Time Machine entry (evidence custody must
+    reflect real changes, not rehearsal noise).
+    """
+    history = ledger.artifact_history(artifact_key)
+    latest = _latest_version(history)
+
+    if latest is not None and _value_of(latest) == new_value:
+        redis.xadd("corrections", {"event": "correction_noop", "correction": correction})
+        return {
+            "artifact_key": artifact_key,
+            "version": latest["version"],
+            "correction_id": correction.get("id"),
+            "no_op": True,
+        }
+
+    version = (latest["version"] if latest else 0) + 1
+    ledger.append_artifact_version(
+        artifact_key=artifact_key,
+        version=version,
+        value=new_value,
+        source_case=correction.get("case_id"),
+        correction_id=correction.get("id"),
+    )
+    redis.xadd("corrections", {"event": event, "correction": correction})
+    return {
+        "artifact_key": artifact_key,
+        "version": version,
+        "correction_id": correction.get("id"),
+        "no_op": False,
+    }
+
+
 def apply(
     correction: dict[str, Any],
     *,
@@ -73,53 +134,43 @@ def apply(
 ) -> dict[str, Any]:
     ctype = correction.get("type")
     proposal = correction.get("proposal", {})
-    artifact_key = ""
-    version = 1
+    result: dict[str, Any] = {"artifact_key": "", "version": 1, "correction_id": correction.get("id")}
 
     if ctype == "routing_rule":
         rules = redis.get_routing_rules()
         rules = [r for r in rules if r.get("rule") != proposal.get("rule")]
         rules.append(proposal)
         redis.set_routing_rules(rules)
-        artifact_key = "routing:rules"
-        history = ledger.artifact_history(artifact_key)
-        version = max((row["version"] for row in history), default=0) + 1
-        ledger.append_artifact_version(
-            artifact_key=artifact_key,
-            version=version,
-            value={"rules": rules},
-            source_case=correction.get("case_id"),
-            correction_id=correction.get("id"),
+        result = _commit_artifact(
+            ledger=ledger,
+            redis=redis,
+            artifact_key="routing:rules",
+            new_value={"rules": rules},
+            correction=correction,
+            event="applied_routing_rule",
         )
-        redis.xadd("corrections", {"event": "applied_routing_rule", "correction": correction})
 
     elif ctype == "memory_update":
         redis.set_memory(proposal["key"], proposal["value"], version=proposal["version"])
-        artifact_key = f"memory:{proposal['key']}"
-        history = ledger.artifact_history(artifact_key)
-        version = max((row["version"] for row in history), default=0) + 1
-        ledger.append_artifact_version(
-            artifact_key=artifact_key,
-            version=version,
-            value=proposal,
-            source_case=correction.get("case_id"),
-            correction_id=correction.get("id"),
+        result = _commit_artifact(
+            ledger=ledger,
+            redis=redis,
+            artifact_key=f"memory:{proposal['key']}",
+            new_value=proposal,
+            correction=correction,
+            event="applied_memory_patch",
         )
-        redis.xadd("corrections", {"event": "applied_memory_patch", "correction": correction})
 
     elif ctype == "config_update":
         redis.set_config(proposal["key"], proposal["value"])
-        artifact_key = f"config:{proposal['key']}"
-        history = ledger.artifact_history(artifact_key)
-        version = max((row["version"] for row in history), default=0) + 1
-        ledger.append_artifact_version(
-            artifact_key=artifact_key,
-            version=version,
-            value=proposal,
-            source_case=correction.get("case_id"),
-            correction_id=correction.get("id"),
+        result = _commit_artifact(
+            ledger=ledger,
+            redis=redis,
+            artifact_key=f"config:{proposal['key']}",
+            new_value=proposal,
+            correction=correction,
+            event="applied_config_patch",
         )
-        redis.xadd("corrections", {"event": "applied_config_patch", "correction": correction})
 
-    ledger.record_audit("correction_applied", {"correction": correction, "artifact_key": artifact_key})
-    return {"artifact_key": artifact_key, "version": version, "correction_id": correction.get("id")}
+    ledger.record_audit("correction_applied", {"correction": correction, "artifact_key": result["artifact_key"]})
+    return result

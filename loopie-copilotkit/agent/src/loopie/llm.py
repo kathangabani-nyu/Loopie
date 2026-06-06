@@ -14,13 +14,79 @@ if TYPE_CHECKING:
     from src.loopie.stores.ledger import Ledger
 
 
-_MOCK_NARRATION: dict[str, str] = {
-    "triage": "Routing ticket to policy and resolution workflow.",
-    "memory_lookup": "Retrieved refund policy from Redis memory store.",
-    "policy_check": "Evaluated routing guards against ticket context.",
-    "resolution": "Selected resolution action based on policy state.",
-    "evaluator": "Graded outcome against deterministic scorers.",
-}
+_SECURITY_GUARD_RULE = "security_flag_blocks_refund"
+
+
+def _refund_window_days(artifacts: dict[str, Any] | None) -> int | None:
+    memory = (artifacts or {}).get("memory") or {}
+    raw = memory.get("policy:refund_window")
+    if not raw:
+        return None
+    for token in str(raw).replace(",", " ").split():
+        if token.isdigit():
+            return int(token)
+    return None
+
+
+def _has_security_guard(artifacts: dict[str, Any] | None) -> bool:
+    rules = (artifacts or {}).get("routing_rules") or []
+    return any(r.get("rule") == _SECURITY_GUARD_RULE for r in rules)
+
+
+def mock_narration(
+    node: str,
+    ticket: dict[str, Any] | None = None,
+    artifacts: dict[str, Any] | None = None,
+) -> str:
+    """Deterministic, case-specific narration grounded in the ticket + live artifacts.
+
+    Mock mode only: the text reflects the actual retrieved artifact and the oracle's
+    decision so the causality trace explains *why* a case passes or fails, instead of
+    emitting the same generic line for every case.
+    """
+    ticket = ticket or {}
+    case_id = ticket.get("case_id", "unknown")
+    security_flag = bool(ticket.get("security_flag"))
+    days = ticket.get("days_since_purchase")
+    tier = ticket.get("customer_tier", "standard")
+    failure_seed = ticket.get("failure_seed")
+    must_check = bool(ticket.get("must_check_policy_version"))
+
+    if node == "triage":
+        if security_flag:
+            return f"triage [{case_id}]: payment/refund requested with security_flag RAISED — routing to policy + resolution."
+        if failure_seed == "planner_loop":
+            return f"triage [{case_id}]: refund missing policy-version metadata — routing to policy lookup."
+        return f"triage [{case_id}]: refund request · {days}d since purchase · {tier} tier — routing to policy + resolution."
+
+    if node == "memory_lookup":
+        window = _refund_window_days(artifacts)
+        if window is not None:
+            return f"memory_lookup [{case_id}]: refund policy window = {window} days (from Redis memory)."
+        return f"memory_lookup [{case_id}]: no refund-window policy found in Redis memory."
+
+    if node == "policy_check":
+        if security_flag:
+            state = "ACTIVE" if _has_security_guard(artifacts) else "MISSING"
+            return f"policy_check [{case_id}]: security guard '{_SECURITY_GUARD_RULE}' = {state}."
+        if must_check:
+            return f"policy_check [{case_id}]: ticket requires a fresh policy version — verifying provenance."
+        return f"policy_check [{case_id}]: standard refund guards evaluated, none blocking."
+
+    if node == "resolution":
+        try:
+            from src.loopie.decide import decide_action, decide_tool_calls
+
+            action = decide_action(ticket, artifacts or {})
+            tools = ", ".join(c["name"] for c in decide_tool_calls(action)) or "no tool"
+            return f"resolution [{case_id}]: decision → {action} (calls: {tools})."
+        except Exception:
+            return f"resolution [{case_id}]: selected resolution action based on policy state."
+
+    if node == "evaluator":
+        return f"evaluator [{case_id}]: grading against deterministic scorers (action_match, unauthorized_tool_call, …)."
+
+    return f"Mock narration for {node} [{case_id}]."
 
 
 @dataclass
@@ -56,9 +122,10 @@ class LLMGateway:
         fixture_id: str,
         artifact_version: str,
         ticket: dict[str, Any] | None = None,
+        artifacts: dict[str, Any] | None = None,
     ) -> LLMResult:
         if self.settings.is_mock:
-            text = _MOCK_NARRATION.get(node, f"Mock narration for {node}.")
+            text = mock_narration(node, ticket, artifacts)
             result = LLMResult(
                 text=text,
                 mode="mock",

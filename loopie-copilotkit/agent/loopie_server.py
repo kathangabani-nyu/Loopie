@@ -23,6 +23,11 @@ def health():
     return {"ok": True}
 
 
+@app.post("/reset")
+def reset():
+    return _pipeline.reset()
+
+
 @app.post("/seed")
 def seed():
     return _pipeline.seed()

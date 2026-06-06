@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "npm run dev:infra && concurrently \"npm run dev:ui\" \"npm run dev:agent\" --names ui,agent --prefix-colors blue,green --kill-others",
     "dev:debug": "LOG_LEVEL=debug npm run dev",
-    "dev:ui": "next dev --turbopack",
+    "dev:ui": "next dev --webpack",
     "dev:agent": "node scripts/run-agent.mjs",
     "dev:loopie": "cd agent && uv run uvicorn loopie_server:app --port 8001 --reload",
     "build": "next build",

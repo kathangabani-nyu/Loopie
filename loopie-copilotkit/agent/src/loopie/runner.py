@@ -66,6 +66,7 @@ def run_ticket(
             fixture_id=ticket["case_id"],
             artifact_version=artifact_version,
             ticket=ticket,
+            artifacts=artifacts,
         )
         narration[node] = result.text
         trace.append({"node": node, "narration": result.text, "mode": result.mode})

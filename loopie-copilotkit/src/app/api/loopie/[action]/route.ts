@@ -13,6 +13,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ act
   const body = await req.json().catch(() => ({}));
 
   switch (action) {
+    case "reset":
+      return proxy("/reset", { method: "POST" });
     case "seed":
       return proxy("/seed", { method: "POST" });
     case "baseline":

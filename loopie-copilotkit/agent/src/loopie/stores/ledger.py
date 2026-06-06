@@ -139,7 +139,36 @@ class Ledger:
                 )
                 conn.commit()
         except Exception:
-            self._memory_rows.append(row)
+            # Mirror the Postgres UNIQUE(artifact_key, version) constraint so repeated
+            # seeds in the in-memory fallback don't create duplicate rows.
+            already = any(
+                r["artifact_key"] == artifact_key and r["version"] == version
+                for r in self._memory_rows
+            )
+            if not already:
+                self._memory_rows.append(row)
+
+    def reset(self) -> None:
+        """Clear all Loopie ledger state (artifacts, costs, eval/correction rows).
+
+        Restores a clean slate so each demo rehearsal/recording starts at v1.
+        """
+        self._memory_rows.clear()
+        self._memory_costs.clear()
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    TRUNCATE loopie.artifact_versions, loopie.cost_ledger,
+                             loopie.corrections, loopie.eval_runs,
+                             loopie.eval_case_results, loopie.approval_events,
+                             loopie.audit_events
+                    RESTART IDENTITY CASCADE
+                    """
+                )
+                conn.commit()
+        except Exception:
+            pass
 
     def record_cost(
         self,

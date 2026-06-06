@@ -31,6 +31,14 @@ def _sync_state() -> dict[str, Any]:
 
 
 @tool
+def reset_demo() -> dict[str, Any]:
+    """Wipe Redis + Postgres back to a clean slate and reseed baseline artifacts."""
+    result = _pipeline.reset()
+    _sync_state()
+    return result
+
+
+@tool
 def seed() -> dict[str, Any]:
     """Seed Redis and Postgres with baseline flawed artifacts."""
     result = _pipeline.seed()
@@ -91,6 +99,7 @@ def get_budget_status() -> dict[str, Any]:
 
 
 control_tools = [
+    reset_demo,
     seed,
     run_baseline,
     propose_corrections,
