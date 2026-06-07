@@ -34,6 +34,8 @@ class LoopieControlState(TypedDict, total=False):
     artifactProof: dict[str, Any] | None
     evalDelta: dict[str, Any]
     counterfactual: dict[str, Any]
+    weaveEvalBaseline: dict[str, Any]
+    weaveEvalPatched: dict[str, Any]
     events: list[dict[str, Any]]
     budget: dict[str, Any]
     approvalState: str
@@ -72,6 +74,8 @@ def _state_items() -> list[StateItem]:
         "artifactProof",
         "evalDelta",
         "counterfactual",
+        "weaveEvalBaseline",
+        "weaveEvalPatched",
         "events",
         "budget",
         "approvalState",

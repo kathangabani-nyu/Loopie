@@ -33,3 +33,36 @@ def test_budget_allows_under_cap(monkeypatch):
 
 def test_max_chat_cost_default():
     assert max_chat_cost_usd() == 40.0
+
+
+def test_reset_preserves_chat_ledger_rows():
+    ledger = MemoryLedger()
+    ledger.record_cost(
+        run_id="chat_persist",
+        provider="openai",
+        model="gpt-5.5",
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+        estimated_cost=0.02,
+        stop_reason="chat",
+        mode="chat",
+    )
+    ledger.record_cost(
+        run_id="pipeline_run",
+        provider="openai",
+        model="gpt-4o-mini",
+        prompt_tokens=1,
+        completion_tokens=1,
+        total_tokens=2,
+        estimated_cost=0.001,
+        stop_reason="completed",
+        mode="live",
+    )
+    assert ledger.total_cost(mode="chat") == pytest.approx(0.02)
+    assert ledger.total_cost(mode="live") == pytest.approx(0.001)
+
+    ledger.reset()
+
+    assert ledger.total_cost(mode="chat") == pytest.approx(0.02)
+    assert ledger.total_cost(mode="live") == 0.0

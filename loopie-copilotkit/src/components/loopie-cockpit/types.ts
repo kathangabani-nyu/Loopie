@@ -60,6 +60,8 @@ export type LoopieState = {
   events?: Array<Record<string, unknown>>;
   budget?: Record<string, unknown>;
   approvalState?: string;
+  weaveEvalBaseline?: WeaveEvalState;
+  weaveEvalPatched?: WeaveEvalState;
   preflight?: {
     ok?: boolean;
     hosted?: boolean;
@@ -72,6 +74,26 @@ export type LoopieState = {
     llm_mode?: string;
     full_agentic?: boolean;
   };
+};
+
+export type WeaveEvalState = {
+  label?: string;
+  passed?: number;
+  failed?: number;
+  total?: number;
+  weave_eval_id?: string | null;
+  weave_project_url?: string | null;
+  weave_eval_error?: string | null;
+  weave_eval_used_manual_fallback?: boolean;
+};
+
+export type WeaveProofView = {
+  enabled: boolean;
+  baselineUrl: string | null;
+  patchedUrl: string | null;
+  baselineError: string | null;
+  patchedError: string | null;
+  manualFallback: boolean;
 };
 
 export type StreamEvent = {

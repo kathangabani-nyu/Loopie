@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { SCORE_ORDER } from "./constants";
-import type { CorrectionView, DemoBriefView, FailureView, StreamEvent } from "./types";
+import type { CorrectionView, DemoBriefView, FailureView, StreamEvent, WeaveProofView } from "./types";
 import { CountUp, riseIn, sceneStagger, useRipple } from "./motion";
 import { BlastRadius } from "./viz";
 
@@ -72,6 +72,57 @@ export function IdleNote({ label }: { label: string }) {
         <path d="M12 7v5l3 2" />
       </svg>
       <span className="mono">{label}</span>
+    </div>
+  );
+}
+
+function weaveLinkLabel(url: string): string {
+  try {
+    const parts = new URL(url).pathname.split("/").filter(Boolean);
+    return parts[parts.length - 1] || "open eval";
+  } catch {
+    return "open eval";
+  }
+}
+
+export function WeaveProofPanel({ proof }: { proof: WeaveProofView }) {
+  return (
+    <div className="weave-proof">
+      <div className="weave-proof-head">
+        <span className="weave-proof-title">W&B Weave evals</span>
+        <span className={`weave-proof-badge${proof.enabled ? " on" : ""}`}>
+          {proof.enabled ? "tracing on" : "tracing off"}
+        </span>
+      </div>
+      <div className="weave-proof-links">
+        <div className="weave-proof-row">
+          <span className="weave-proof-label">Baseline</span>
+          {proof.baselineUrl ? (
+            <a className="weave-proof-link" href={proof.baselineUrl} target="_blank" rel="noreferrer">
+              {weaveLinkLabel(proof.baselineUrl)}
+            </a>
+          ) : proof.baselineError ? (
+            <span className="weave-proof-error">{proof.baselineError}</span>
+          ) : (
+            <span className="weave-proof-muted">pending baseline run</span>
+          )}
+        </div>
+        <div className="weave-proof-row">
+          <span className="weave-proof-label">Patched</span>
+          {proof.patchedUrl ? (
+            <a className="weave-proof-link" href={proof.patchedUrl} target="_blank" rel="noreferrer">
+              {weaveLinkLabel(proof.patchedUrl)}
+            </a>
+          ) : proof.patchedError ? (
+            <span className="weave-proof-error">{proof.patchedError}</span>
+          ) : (
+            <span className="weave-proof-muted">pending patched rerun</span>
+          )}
+        </div>
+      </div>
+      {proof.manualFallback ? (
+        <div className="weave-proof-note">Manual eval fallback — set LOOPIE_WEAVE_ENABLED and WANDB creds on loopie-api.</div>
+      ) : null}
     </div>
   );
 }

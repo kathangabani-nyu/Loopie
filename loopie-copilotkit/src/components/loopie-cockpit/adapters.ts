@@ -15,6 +15,7 @@ import type {
   SwarmView,
   TraceNode,
   VerdictView,
+  WeaveProofView,
 } from "./types";
 
 type RawCorrection = NonNullable<LoopieState["proposedCorrections"]>[number];
@@ -374,6 +375,26 @@ export function buildCorrectionView(state: LoopieState): CorrectionView | null {
     approved: state.approvalState === "approved",
     beforeHash: proof?.before_hash || undefined,
     afterHash: proof?.after_hash || undefined,
+  };
+}
+
+export function buildWeaveProofView(state: LoopieState): WeaveProofView | null {
+  const baseline = state.weaveEvalBaseline;
+  const patched = state.weaveEvalPatched;
+  const enabled = Boolean(state.preflight?.weave_enabled);
+  if (!enabled && !baseline && !patched) return null;
+
+  const manualFallback = Boolean(
+    baseline?.weave_eval_used_manual_fallback || patched?.weave_eval_used_manual_fallback,
+  );
+
+  return {
+    enabled,
+    baselineUrl: baseline?.weave_project_url || null,
+    patchedUrl: patched?.weave_project_url || null,
+    baselineError: baseline?.weave_eval_error || null,
+    patchedError: patched?.weave_eval_error || null,
+    manualFallback,
   };
 }
 

@@ -20,6 +20,7 @@ import {
   buildSwarmView,
   buildTraceView,
   buildVerdictView,
+  buildWeaveProofView,
   derivePhase,
   tracePassing,
 } from "./adapters";
@@ -32,6 +33,7 @@ import {
   FailedCase,
   IdleNote,
   Panel,
+  WeaveProofPanel,
 } from "./panels";
 import type { Phase } from "./types";
 import {
@@ -163,6 +165,7 @@ export function LoopieCockpit() {
   const swarm = buildSwarmView(state, phase, loading || agentRunning);
   const traceIsPassing = tracePassing(state, phase);
   const demoBrief = buildDemoBriefView(state, phase);
+  const weaveProof = buildWeaveProofView(state);
 
   return (
     <div className="loopie-cockpit-root">
@@ -383,13 +386,18 @@ export function LoopieCockpit() {
 
             <Panel
               title="Score Delta (before -> after)"
-              subtitle="same eval, two artifact states"
+              subtitle="same eval, two artifact states + Weave compare"
               area="delta"
-              live={!!live.delta}
+              live={!!live.delta || !!weaveProof}
               scroll={false}
             >
               {evalDelta ? (
-                <EvalDelta data={evalDelta} />
+                <>
+                  <EvalDelta data={evalDelta} />
+                  {weaveProof ? <WeaveProofPanel proof={weaveProof} /> : null}
+                </>
+              ) : weaveProof ? (
+                <WeaveProofPanel proof={weaveProof} />
               ) : (
                 <IdleNote label="no eval yet" />
               )}

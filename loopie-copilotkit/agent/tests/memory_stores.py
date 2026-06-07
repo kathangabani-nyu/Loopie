@@ -93,8 +93,9 @@ class MemoryLedger(Ledger):
         return None
 
     def reset(self) -> None:
+        chat_costs = [row for row in self._memory_costs if row.get("mode") == "chat"]
         self._memory_rows.clear()
-        self._memory_costs.clear()
+        self._memory_costs = chat_costs
 
     def append_artifact_version(self, **kwargs: Any) -> None:
         row = {

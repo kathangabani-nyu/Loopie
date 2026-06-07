@@ -1346,3 +1346,93 @@
   gap: 8px;
   margin-top: 10px;
 }
+
+.loopie-cockpit-root .weave-proof {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.loopie-cockpit-root .weave-proof-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.loopie-cockpit-root .weave-proof-title {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.loopie-cockpit-root .weave-proof-badge {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 99px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.loopie-cockpit-root .weave-proof-badge.on {
+  color: var(--teal);
+  border-color: oklch(0.74 0.15 196 / 0.35);
+  box-shadow: 0 0 12px -4px oklch(0.74 0.15 196 / 0.45);
+}
+
+.loopie-cockpit-root .weave-proof-links {
+  display: grid;
+  gap: 8px;
+}
+
+.loopie-cockpit-root .weave-proof-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.loopie-cockpit-root .weave-proof-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.loopie-cockpit-root .weave-proof-link {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--teal);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loopie-cockpit-root .weave-proof-link:hover {
+  text-decoration: underline;
+}
+
+.loopie-cockpit-root .weave-proof-muted,
+.loopie-cockpit-root .weave-proof-error {
+  font-size: 12px;
+}
+
+.loopie-cockpit-root .weave-proof-muted {
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.loopie-cockpit-root .weave-proof-error {
+  color: var(--magenta);
+}
+
+.loopie-cockpit-root .weave-proof-note {
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.55);
+}
