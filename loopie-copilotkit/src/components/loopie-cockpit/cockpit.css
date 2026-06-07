@@ -365,6 +365,15 @@
   color: var(--tx-hi);
   font-weight: 600;
 }
+.loopie-cockpit-root a.phase-pill-link {
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.loopie-cockpit-root a.phase-pill-link:hover {
+  border-color: rgba(88, 166, 255, 0.5);
+  background: rgba(88, 166, 255, 0.08);
+}
 .loopie-cockpit-root .cmdbar {
   display: flex;
   align-items: center;
