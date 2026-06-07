@@ -31,7 +31,7 @@ export function ExampleLayout({ chatContent, appContent }: ExampleLayoutProps) {
   });
 
   return (
-    <div className="h-full flex flex-row pb-6">
+    <div className="h-full min-h-0 flex flex-row">
       <ModeToggle mode={mode} onModeChange={setMode} />
 
       {/* Chat Content */}
@@ -61,13 +61,13 @@ export function ExampleLayout({ chatContent, appContent }: ExampleLayoutProps) {
 
       {/* State Panel */}
       <div
-        className={`h-full overflow-hidden ${
+        className={`h-full min-w-0 overflow-auto ${
           mode === "app"
             ? "w-2/3 max-lg:w-full border-l border-[var(--border)] max-lg:border-l-0" // Full width on mobile
             : "w-0 border-l-0"
         }`}
       >
-        <div className="w-full lg:w-[66.666vw] h-full">{appContent}</div>
+        <div className="w-full min-w-0 h-full">{appContent}</div>
       </div>
     </div>
   );

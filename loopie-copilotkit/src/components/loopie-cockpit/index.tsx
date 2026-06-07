@@ -1,65 +1,35 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-type LoopieState = {
-  runs?: Record<string, unknown>;
-  currentFailure?: {
-    case_id?: string;
-    category?: string;
-    scores?: Record<string, boolean>;
-    run?: RunReceipt;
-  } | null;
-  proposedCorrections?: Array<{ id?: string; summary?: string; proposal?: Record<string, unknown> }>;
-  artifactHistory?: Array<Record<string, unknown>>;
-  evalDelta?: Record<string, unknown>;
-  counterfactual?: { no_regression?: boolean; newly_failing?: string[] };
-  events?: Array<Record<string, unknown>>;
-  budget?: Record<string, unknown>;
-  approvalState?: string;
-};
+import "./cockpit.css";
+import "./components.css";
 
-type RunReceipt = {
-  action?: string;
-  artifact_hash?: string;
-  decided_by?: string;
-  fallback_used?: boolean;
-  decision_schema_version?: string;
-  prompt_version?: string;
-};
-
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-lg border border-[--border] bg-[--card] p-4">
-      <h3 className="text-sm font-semibold mb-2">{title}</h3>
-      {children}
-    </section>
-  );
-}
-
-function ReceiptChip({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "good" | "warn" }) {
-  const toneClass =
-    tone === "good"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-      : tone === "warn"
-        ? "border-amber-200 bg-amber-50 text-amber-900"
-        : "border-[--border] bg-[--muted] text-[--foreground]";
-
-  return (
-    <span className={`inline-flex min-h-8 items-center gap-1 rounded-md border px-2.5 py-1 text-xs ${toneClass}`}>
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-semibold">{value}</span>
-    </span>
-  );
-}
-
-function asRunReceipt(value: unknown): RunReceipt | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const record = value as Record<string, unknown>;
-  if (record.run && typeof record.run === "object") return record.run as RunReceipt;
-  if (!("artifact_hash" in record) && !("decided_by" in record) && !("fallback_used" in record)) return undefined;
-  return record as RunReceipt;
-}
+import {
+  buildArtifactHistory,
+  buildBudgetView,
+  buildCorrectionView,
+  buildEvalDeltaView,
+  buildEventStream,
+  buildFailureView,
+  buildScorecard,
+  buildTraceView,
+  buildVerdictView,
+  derivePhase,
+  tracePassing,
+} from "./adapters";
+import { COMMANDS, HERO_CASE_ID, LIVE, PHASE_LABEL, PHASES } from "./constants";
+import { useRipple } from "./motion";
+import {
+  CorrectionPanel,
+  EventStream,
+  FailedCase,
+  IdleNote,
+  Panel,
+} from "./panels";
+import type { LoopieState, Phase } from "./types";
+import { BudgetMeter, CausalityTrace, EvalDelta, Scorecard, TimeMachine, VerdictStrip } from "./viz";
 
 async function post(action: string, body: Record<string, unknown> = {}) {
   const res = await fetch(`/api/loopie/${action}`, {
@@ -77,9 +47,15 @@ async function post(action: string, body: Record<string, unknown> = {}) {
 export function LoopieCockpit() {
   const [state, setState] = useState<LoopieState>({});
   const [loading, setLoading] = useState(false);
-  const [lastResult, setLastResult] = useState<Record<string, unknown> | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [wiping, setWiping] = useState(false);
+  const [autopilot, setAutopilot] = useState(false);
+  const apRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ripple = useRipple();
+
+  const phase = derivePhase(state);
+  const idx = PHASES.indexOf(phase);
+  const live = LIVE[phase] || {};
 
   const refresh = useCallback(async () => {
     const res = await fetch("/api/loopie/state");
@@ -88,7 +64,7 @@ export function LoopieCockpit() {
       throw new Error(
         typeof data.error === "string"
           ? data.error
-          : "Loopie API unavailable — run `npm run dev:loopie` in a second terminal.",
+          : "Loopie API unavailable - run `npm run dev:loopie` on port 8001.",
       );
     }
     setState(await res.json());
@@ -100,124 +76,323 @@ export function LoopieCockpit() {
     });
   }, [refresh]);
 
-  const run = async (action: string, body: Record<string, unknown> = {}) => {
-    setLoading(true);
-    setError(null);
-    setStatus(`Running ${action}...`);
-    try {
-      const result = await post(action, body);
-      setLastResult(result);
-      await refresh();
-      setStatus(`${action} complete`);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Action failed";
-      setError(message);
-      setStatus(null);
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    if (error) return;
+    const iv = setInterval(() => {
+      refresh().catch(() => {});
+    }, 4000);
+    return () => clearInterval(iv);
+  }, [refresh, error]);
 
-  const failure = state.currentFailure;
-  const proposal = state.proposedCorrections?.[0];
-  const lastRun = asRunReceipt(lastResult) || failure?.run;
-  const artifactHash = lastRun?.artifact_hash ? lastRun.artifact_hash.slice(0, 8) : "pending";
-  const fallbackUsed = lastRun?.fallback_used === true;
-  const noRegression =
-    typeof state.counterfactual?.no_regression === "boolean"
-      ? state.counterfactual.no_regression ? "clear" : "regression"
-      : "pending";
+  const runAction = useCallback(
+    async (action: string, body: Record<string, unknown> = {}) => {
+      setLoading(true);
+      setError(null);
+      try {
+        if (action === "approve" && !body.correction_id) {
+          const correctionId = state.proposedCorrections?.[0]?.id;
+          if (!correctionId) throw new Error("No correction to approve");
+          body = { correction_id: correctionId };
+        }
+        await post(action, body);
+        await refresh();
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Action failed");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [refresh, state.proposedCorrections],
+  );
+
+  const advance = useCallback(
+    (to: Phase) => {
+      const cmd = COMMANDS.find((c) => c.id === to);
+      if (!cmd) return;
+      const body = { ...(cmd.body || {}) };
+      if (cmd.action === "approve") {
+        body.correction_id = state.proposedCorrections?.[0]?.id;
+      }
+      void runAction(cmd.action, body);
+    },
+    [runAction, state.proposedCorrections],
+  );
+
+  const doReset = useCallback(() => {
+    setAutopilot(false);
+    setWiping(true);
+    void post("reset").catch(() => {});
+    setTimeout(() => {
+      setState({});
+      setError(null);
+    }, 360);
+    setTimeout(() => {
+      setWiping(false);
+      refresh().catch(() => {});
+    }, 820);
+  }, [refresh]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).tagName === "INPUT") return;
+      if (e.key === "r" || e.key === "R") doReset();
+      else if (e.key === " ") {
+        e.preventDefault();
+        setAutopilot((a) => !a);
+      } else {
+        const c = COMMANDS.find((c) => c.key === e.key);
+        if (c && c.from === phase && !loading) advance(c.id);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [phase, advance, doReset, loading]);
+
+  useEffect(() => {
+    if (!autopilot || loading) {
+      if (apRef.current) clearTimeout(apRef.current);
+      return;
+    }
+    const seq: Phase[] = ["baseline", "proposal", "approved", "patched", "counterfactual"];
+    if (phase === "counterfactual") {
+      setAutopilot(false);
+      return;
+    }
+    const target: Phase = phase === "idle" ? "baseline" : seq[seq.indexOf(phase) + 1];
+    const delay = phase === "idle" ? 600 : 2600;
+    apRef.current = setTimeout(() => advance(target), delay);
+    return () => {
+      if (apRef.current) clearTimeout(apRef.current);
+    };
+  }, [autopilot, phase, advance, loading]);
+
+  const events = buildEventStream(state.events);
+  const failure = buildFailureView(state);
+  const trace = buildTraceView(state, phase);
+  const correction = buildCorrectionView(state);
+  const evalDelta = buildEvalDeltaView(state);
+  const artifactHistory = buildArtifactHistory(state, phase);
+  const budget = buildBudgetView(state);
+  const verdict = buildVerdictView(state, phase);
+  const scorecard = buildScorecard(state, phase);
+  const traceIsPassing = tracePassing(state, phase);
 
   return (
-    <div className="h-full overflow-y-auto bg-[--background] p-6 space-y-4">
-      <header className="space-y-2">
-        <p className="text-sm text-muted-foreground">
-          Loopie demo cockpit — click buttons left to right. Requires <code className="text-xs">npm run dev:loopie</code> on port 8001.
-        </p>
-        {error && (
-          <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">{error}</p>
-        )}
-        {status && !error && (
-          <p className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-3 py-2">{status}</p>
-        )}
-        <div className="flex flex-wrap gap-2">
-        <button disabled={loading} className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm" onClick={() => run("seed")}>Seed</button>
-        <button disabled={loading} className="px-3 py-1.5 rounded-md bg-slate-700 text-white text-sm" onClick={() => run("baseline", { case_id: "security_001" })}>Run Baseline</button>
-        <button disabled={loading} className="px-3 py-1.5 rounded-md bg-amber-600 text-white text-sm" onClick={() => run("propose")}>Propose</button>
-        <button disabled={loading || !proposal?.id} className="px-3 py-1.5 rounded-md bg-green-600 text-white text-sm" onClick={() => proposal?.id && run("approve", { correction_id: proposal.id })}>Approve</button>
-        <button disabled={loading} className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm" onClick={() => run("patched", { case_id: "security_001" })}>Rerun + Compare</button>
-        <button disabled={loading} className="px-3 py-1.5 rounded-md bg-purple-600 text-white text-sm" onClick={() => run("counterfactual", { hero_case_id: "security_001" })}>Counterfactual Replay</button>
-        </div>
-      </header>
-
-      {lastResult && (
-        <Panel title="Last Action Result">
-          <pre className="text-xs bg-black/5 p-2 rounded overflow-x-auto max-h-32">{JSON.stringify(lastResult, null, 2)}</pre>
-        </Panel>
-      )}
-
-      <Panel title="Run Receipts">
-        <div className="flex flex-wrap gap-2">
-          <ReceiptChip label="scoring" value="deterministic" tone="good" />
-          <ReceiptChip label="decision" value={lastRun?.decided_by || "pending"} tone={lastRun?.decided_by === "llm" ? "good" : "neutral"} />
-          <ReceiptChip label="fallback" value={fallbackUsed ? "used" : "clear"} tone={fallbackUsed ? "warn" : "good"} />
-          <ReceiptChip label="artifact" value={artifactHash} />
-          <ReceiptChip label="approval" value={state.approvalState || "idle"} tone={state.approvalState === "approved" ? "good" : "neutral"} />
-          <ReceiptChip label="no-regression" value={noRegression} tone={noRegression === "clear" ? "good" : noRegression === "regression" ? "warn" : "neutral"} />
-        </div>
-      </Panel>
-
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <Panel title="Event Stream">
-          <ul className="text-xs space-y-1 max-h-48 overflow-y-auto font-mono">
-            {(state.events || []).slice(-20).map((evt, i) => (
-              <li key={i}>{JSON.stringify(evt)}</li>
-            ))}
-            {!state.events?.length && <li className="text-muted-foreground">No events yet.</li>}
-          </ul>
-        </Panel>
-
-        <Panel title="Failure Card">
-          {failure ? (
-            <div className="text-sm space-y-1">
-              <p><strong>Case:</strong> {failure.case_id}</p>
-              <p><strong>Genome:</strong> {failure.category}</p>
-              <pre className="text-xs bg-black/5 p-2 rounded">{JSON.stringify(failure.scores, null, 2)}</pre>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">Run baseline to load failure.</p>
-          )}
-        </Panel>
-
-        <Panel title="Correction Diff">
-          {proposal ? (
-            <div className="text-sm space-y-1">
-              <p>{proposal.summary}</p>
-              <pre className="text-xs bg-black/5 p-2 rounded">{JSON.stringify(proposal.proposal, null, 2)}</pre>
-              <p className="text-xs">Approval: {state.approvalState || "idle"}</p>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">Propose a correction after baseline failure.</p>
-          )}
-        </Panel>
+    <div className="loopie-cockpit-root">
+      <div className="stage">
+        <div className="aurora a1" />
+        <div className="aurora a2" />
+        <div className="grain" />
+        <div className="vignette" />
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <Panel title="Eval Delta">
-          <pre className="text-xs bg-black/5 p-2 rounded">{JSON.stringify(state.evalDelta || {}, null, 2)}</pre>
-        </Panel>
-        <Panel title="Counterfactual / No Regression">
-          <pre className="text-xs bg-black/5 p-2 rounded">{JSON.stringify(state.counterfactual || {}, null, 2)}</pre>
-        </Panel>
-      </div>
+      <AnimatePresence>
+        {wiping && (
+          <motion.div
+            className="wipe"
+            key="wipe"
+            initial={{ scaleX: 0, opacity: 0.95 }}
+            animate={{ scaleX: 1, opacity: 0.95 }}
+            exit={{ scaleX: 0, opacity: 0, transformOrigin: "right" }}
+            transition={{ duration: 0.42, ease: [0.65, 0, 0.35, 1] }}
+          />
+        )}
+      </AnimatePresence>
 
-      <Panel title="Artifact Time Machine">
-        <pre className="text-xs bg-black/5 p-2 rounded max-h-40 overflow-y-auto">{JSON.stringify(state.artifactHistory || [], null, 2)}</pre>
-      </Panel>
+      <MotionConfig reducedMotion="user">
+        <div className="cockpit">
+          <header className="topbar">
+            <div className="topbar-row">
+              <div className="brand">
+                <div className="mark" />
+                <div>
+                  <h1>LOOPIE</h1>
+                  <div className="sub">reliability CI / agent swarm</div>
+                </div>
+              </div>
+              <div className="grow" />
+              <div className="phase-pill">
+                <span
+                  className="dot"
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: 99,
+                    display: "inline-block",
+                    background: phase === "idle" ? "#44485c" : "#7fe6d8",
+                    boxShadow: phase === "idle" ? "none" : "0 0 10px 1px #7fe6d8",
+                    transition: "background .5s, box-shadow .5s",
+                  }}
+                />
+                phase <b>{PHASE_LABEL[phase]}</b>
+              </div>
+              <div
+                className="phase-pill"
+                title="CopilotKit agent-state binding stays mounted alongside this cockpit"
+              >
+                <span
+                  className="dot"
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: 99,
+                    background: error ? "#ff5a5a" : "#9b6bff",
+                    boxShadow: error ? "0 0 10px 1px #ff5a5a" : "0 0 10px 1px #9b6bff",
+                    display: "inline-block",
+                  }}
+                />
+                api <b>{error ? "offline" : "live"}</b>
+              </div>
+            </div>
 
-      <Panel title="Budget Meter">
-        <pre className="text-xs bg-black/5 p-2 rounded">{JSON.stringify(state.budget || {}, null, 2)}</pre>
-      </Panel>
+            {error && <div className="error-banner">{error}</div>}
+
+            <div className="cmdbar">
+              <button
+                type="button"
+                className="cmd ghost"
+                onClick={(e) => {
+                  ripple(e);
+                  doReset();
+                }}
+                disabled={loading}
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M3 12a9 9 0 1 0 3-6.7M3 4v4h4" />
+                </svg>
+                Reset
+                <span className="kbd">R</span>
+              </button>
+              <div className="div" />
+              {COMMANDS.map((c) => {
+                const isNext = c.from === phase;
+                const done = PHASES.indexOf(c.id) <= idx;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className={`cmd${isNext ? " armed" : ""}`}
+                    disabled={!isNext || loading}
+                    onClick={(e) => {
+                      ripple(e);
+                      advance(c.id);
+                    }}
+                  >
+                    {done && !isNext && (
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="var(--teal)"
+                        strokeWidth="3"
+                      >
+                        <path d="M5 13l4 4L19 7" />
+                      </svg>
+                    )}
+                    {c.label}
+                    {isNext && <span className="kbd">{c.key}</span>}
+                  </button>
+                );
+              })}
+              <div className="div" />
+              <button
+                type="button"
+                className={`cmd${autopilot ? " armed" : ""}`}
+                onClick={(e) => {
+                  ripple(e);
+                  setAutopilot((a) => !a);
+                }}
+                title="Play the whole narrative hands-free (Space)"
+                disabled={!!error}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                  {autopilot ? (
+                    <path d="M6 5h4v14H6zM14 5h4v14h-4z" />
+                  ) : (
+                    <path d="M7 5l12 7-12 7z" />
+                  )}
+                </svg>
+                {autopilot ? "Pause" : "Autopilot"}
+              </button>
+            </div>
+          </header>
+
+          <VerdictStrip verdict={verdict} />
+
+          <div className="grid">
+            <Panel title="Scorecard" area="scorecard" live={!!live.scorecard} scroll>
+              {scorecard ? (
+                <Scorecard data={scorecard} phase={phase} />
+              ) : (
+                <IdleNote label="no scorecard yet" />
+              )}
+            </Panel>
+
+            <Panel
+              title="Live Event Stream"
+              area="stream"
+              live={!!live.stream}
+              tag={`${events.length} events`}
+            >
+              <EventStream events={events} />
+            </Panel>
+
+            <Panel title="Failed Case" area="case" live={!!live.case}>
+              <FailedCase failure={failure} />
+            </Panel>
+
+            <Panel
+              title="Causality Trace"
+              area="trace"
+              live={!!live.trace}
+              tag={
+                trace.length
+                  ? traceIsPassing
+                    ? "passing"
+                    : "failing"
+                  : null
+              }
+              scroll
+            >
+              {trace.length ? (
+                <CausalityTrace
+                  key={traceIsPassing ? "patched" : "baseline"}
+                  trace={trace}
+                  runKey={phase}
+                />
+              ) : (
+                <IdleNote label="no trace yet" />
+              )}
+            </Panel>
+
+            <Panel title="Proposed Correction" area="correction" live={!!live.correction}>
+              <CorrectionPanel
+                correction={correction}
+                canApprove={phase === "proposal"}
+                loading={loading}
+                onApprove={() => advance("approved")}
+              />
+            </Panel>
+
+            <Panel title="Eval Delta" area="delta" live={!!live.delta} scroll={false}>
+              {evalDelta ? (
+                <EvalDelta data={evalDelta} />
+              ) : (
+                <IdleNote label="no eval yet" />
+              )}
+            </Panel>
+
+            <Panel title="Artifact Time Machine" area="timemachine" live={!!live.timemachine} scroll={false}>
+              <TimeMachine history={artifactHistory} />
+            </Panel>
+
+            <Panel title="Budget Meter" area="budget" live={!!live.budget} scroll={false}>
+              <BudgetMeter budget={budget} />
+            </Panel>
+          </div>
+        </div>
+      </MotionConfig>
     </div>
   );
 }

@@ -23,6 +23,7 @@
     "@radix-ui/react-separator": "^1.1.8",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "framer-motion": "^12.40.0",
     "hono": "^4.12.10",
     "lucide-react": "^0.577.0",
     "next": "16.1.6",
