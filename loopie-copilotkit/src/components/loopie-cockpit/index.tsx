@@ -58,7 +58,7 @@ async function post(action: string, body: Record<string, unknown> = {}) {
 }
 
 export function LoopieCockpit() {
-  const { state, error, refresh, runAction, useAgentState, agentRunning } = useLoopieCockpit();
+  const { state, error, refresh, runAction, useAgentState, hasRestState, agentRunning } = useLoopieCockpit();
   const [loading, setLoading] = useState(false);
   const [wiping, setWiping] = useState(false);
   const [autopilot, setAutopilot] = useState(false);
@@ -70,12 +70,12 @@ export function LoopieCockpit() {
   const live = LIVE[phase] || {};
 
   useEffect(() => {
-    if (useAgentState || error) return;
+    if (error) return;
     const iv = setInterval(() => {
       refresh().catch(() => {});
     }, 4000);
     return () => clearInterval(iv);
-  }, [refresh, error, useAgentState]);
+  }, [refresh, error]);
 
   const runActionWrapped = useCallback(
     async (action: string, body: Record<string, unknown> = {}) => {
@@ -228,7 +228,8 @@ export function LoopieCockpit() {
                     display: "inline-block",
                   }}
                 />
-                {useAgentState ? "agent" : "api"} <b>{error ? "offline" : "live"}</b>
+                {hasRestState ? "api" : useAgentState ? "agent" : "api"}{" "}
+                <b>{error ? "offline" : "live"}</b>
               </div>
               <div className="phase-pill" title="Cockpit buttons use the deterministic mock pipeline ($0)">
                 cockpit <b>{COPY.deterministicMode}</b>

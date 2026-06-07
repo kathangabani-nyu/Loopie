@@ -24,18 +24,34 @@ async function postLoopie(action: string, body: Record<string, unknown> = {}) {
   if (!res.ok) {
     throw new Error(typeof data.error === "string" ? data.error : `Request failed (${res.status})`);
   }
+  if (typeof data.error === "string") {
+    throw new Error(data.error);
+  }
   return data;
 }
 
 export function useLoopieCockpit(options: UseLoopieCockpitOptions = {}) {
-  const { preferAgentState = true } = options;
+  const { preferAgentState = false } = options;
   const { agent } = useAgent();
   const [restState, setRestState] = useState<LoopieState>({});
   const [error, setError] = useState<string | null>(null);
   const [useAgentState, setUseAgentState] = useState(preferAgentState);
 
   const agentState = (agent.state || {}) as LoopieState;
-  const hasAgentState = Boolean(agentState.runs || agentState.currentFailure || agentState.proposedCorrections?.length);
+  const hasAgentState = Boolean(
+    agentState.runs ||
+      agentState.currentFailure ||
+      agentState.proposedCorrections?.length ||
+      agentState.artifactProof ||
+      agentState.evalDelta?.case_id,
+  );
+  const hasRestState = Boolean(
+    restState.runs ||
+      restState.currentFailure ||
+      restState.proposedCorrections?.length ||
+      restState.events?.length ||
+      restState.preflight,
+  );
 
   const refresh = useCallback(async () => {
     const res = await fetch("/api/loopie/state");
@@ -48,30 +64,34 @@ export function useLoopieCockpit(options: UseLoopieCockpitOptions = {}) {
       );
     }
     setRestState(await res.json());
+    setError(null);
   }, []);
 
   useEffect(() => {
-    if (useAgentState && hasAgentState) return;
     refresh().catch((err: unknown) => {
       setError(err instanceof Error ? err.message : "Failed to load Loopie state");
     });
-  }, [refresh, useAgentState, hasAgentState]);
-
-  useEffect(() => {
-    if (!useAgentState || hasAgentState) {
-      setError(null);
-    }
-  }, [useAgentState, hasAgentState]);
+  }, [refresh]);
 
   useEffect(() => {
     if (!preferAgentState) return;
-    if (hasAgentState) setUseAgentState(true);
-  }, [preferAgentState, hasAgentState]);
+    if (hasAgentState && !hasRestState) setUseAgentState(true);
+  }, [preferAgentState, hasAgentState, hasRestState]);
 
   const state = useMemo<LoopieState>(() => {
+    // Cockpit buttons mutate loopie-api; REST export_state is authoritative for the proof path.
+    // CopilotKit agent sync may only stream a subset (e.g. events) and must not shadow REST.
+    if (hasRestState) {
+      return {
+        ...agentState,
+        ...restState,
+        budget: { ...agentState.budget, ...restState.budget },
+        preflight: restState.preflight || agentState.preflight,
+      };
+    }
     if (useAgentState && hasAgentState) return agentState;
     return restState;
-  }, [useAgentState, hasAgentState, agentState, restState]);
+  }, [useAgentState, hasAgentState, hasRestState, agentState, restState]);
 
   useHumanInTheLoop({
     name: "approveLoopieCorrection",
@@ -134,6 +154,7 @@ export function useLoopieCockpit(options: UseLoopieCockpitOptions = {}) {
           body = { correction_id: correctionId };
         }
         await postLoopie(action, body);
+        setUseAgentState(false);
         await refresh();
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "Action failed");
@@ -201,6 +222,7 @@ export function useLoopieCockpit(options: UseLoopieCockpitOptions = {}) {
     refresh,
     runAction,
     useAgentState,
+    hasRestState,
     setUseAgentState,
     agentRunning: agent.isRunning,
   };

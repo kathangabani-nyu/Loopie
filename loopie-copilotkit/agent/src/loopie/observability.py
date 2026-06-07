@@ -21,22 +21,24 @@ except ImportError:
     _weave_available = False
 
 
+def weave_tracing_enabled() -> bool:
+    """True when Weave ops/evals should run (independent of LOOPIE_LLM_MODE)."""
+    settings = get_settings()
+    if not settings.weave_enabled:
+        return False
+    return _weave_available and bool(os.getenv("WANDB_API_KEY"))
+
+
 def ensure_weave() -> None:
     """Idempotent weave.init for pipeline and eval paths."""
     global _weave_initialized
-    if _weave_initialized or not _weave_available or not os.getenv("WANDB_API_KEY"):
-        return
-    if get_settings().is_mock:
+    if _weave_initialized or not weave_tracing_enabled():
         return
     try:
         _weave.init(get_settings().weave_project)
         _weave_initialized = True
     except Exception:
         _weave_initialized = False
-
-
-def _tracing_enabled() -> bool:
-    return _weave_available and bool(os.getenv("WANDB_API_KEY")) and not get_settings().is_mock
 
 
 def weave_eval_url(eval_id: str, *, entity: str | None = None, project: str | None = None) -> str:
@@ -50,7 +52,7 @@ def weave_eval_url(eval_id: str, *, entity: str | None = None, project: str | No
 
 
 def op(name: str) -> Callable[[F], F]:
-    """Decorate with weave.op only when live + W&B creds are present."""
+    """Decorate with weave.op when LOOPIE_WEAVE_ENABLED and W&B creds are present."""
 
     def decorator(fn: F) -> F:
         weave_fn: Callable[..., Any] | None = None
@@ -58,7 +60,7 @@ def op(name: str) -> Callable[[F], F]:
         @functools.wraps(fn)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             nonlocal weave_fn
-            if _tracing_enabled():
+            if weave_tracing_enabled():
                 ensure_weave()
                 if weave_fn is None:
                     weave_fn = _weave.op(name=name)(fn)

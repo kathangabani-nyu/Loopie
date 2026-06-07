@@ -139,6 +139,7 @@ def test_replay_cache_hit_on_second_live_run(monkeypatch, memory_redis):
     second = run_ticket(ticket, redis=memory_redis, ledger=ledger, mode="live")
 
     assert first["decided_by"] == "llm"
+    assert first.get("stop_reason") == "completed"
     assert second.get("cache_hit") is True or any(
         step.get("from_cache") for step in second.get("trace", [])
     )

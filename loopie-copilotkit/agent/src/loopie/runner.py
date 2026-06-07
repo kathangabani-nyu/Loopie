@@ -110,6 +110,7 @@ def _execute_run(
         "mode": mode or settings.llm_mode,
         "decided_by": final_state.get("decided_by", "oracle"),
         "fallback_used": bool(final_state.get("fallback_used", False)),
+        "stop_reason": final_state.get("stop_reason", "mock"),
         "decision_schema_version": final_state.get("decision_schema_version"),
         "prompt_version": final_state.get("prompt_version"),
         "cache_hit": bool(final_state.get("cache_hit", False)),

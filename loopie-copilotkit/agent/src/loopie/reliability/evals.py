@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from src.loopie.artifacts import apply_seed_artifacts_to_redis
 from src.loopie.config import get_settings
-from src.loopie.observability import ensure_weave, op
+from src.loopie.observability import ensure_weave, op, weave_eval_url
 from src.loopie.reliability.budget import BudgetTracker
 from src.loopie.reliability.scorers import SCORERS, run_passed, score_run
 from src.loopie.runner import load_tickets, run_ticket
@@ -246,7 +246,7 @@ def evaluate_suite(
                 }
             )
 
-    use_weave_eval = effective_mode == "live" and bool(os.getenv("WANDB_API_KEY"))
+    use_weave_eval = settings.weave_enabled and bool(os.getenv("WANDB_API_KEY"))
 
     if use_weave_eval:
         import weave
@@ -329,10 +329,7 @@ def evaluate_suite(
 
     weave_project_url = None
     if weave_eval_id and os.getenv("WANDB_API_KEY"):
-        entity = os.getenv("WANDB_ENTITY", "")
-        project = get_settings().weave_project
-        base = f"https://wandb.ai/{entity}/{project}" if entity else f"https://wandb.ai/{project}"
-        weave_project_url = f"{base}/weave/evaluations/{weave_eval_id}"
+        weave_project_url = weave_eval_url(weave_eval_id)
 
     return {
         "label": label,

@@ -194,6 +194,7 @@ def resolution_node(state: LoopieState) -> dict[str, Any]:
 
     decided_by = "oracle"
     fallback_used = False
+    stop_reason = "mock"
     decision_schema_version = DECISION_SCHEMA_VERSION
     prompt_version = DECISION_PROMPT_VERSION
     cache_hit = False
@@ -211,6 +212,7 @@ def resolution_node(state: LoopieState) -> dict[str, Any]:
         action = decision.action
         decided_by = decision.decided_by
         fallback_used = decision.fallback_used
+        stop_reason = decision.stop_reason
         decision_schema_version = decision.decision_schema_version
         prompt_version = decision.prompt_version
         cache_hit = decision.from_cache
@@ -268,6 +270,7 @@ def resolution_node(state: LoopieState) -> dict[str, Any]:
         "tool_calls": tool_calls,
         "decided_by": decided_by,
         "fallback_used": fallback_used,
+        "stop_reason": stop_reason,
         "decision_schema_version": decision_schema_version,
         "prompt_version": prompt_version,
         "cache_hit": cache_hit,

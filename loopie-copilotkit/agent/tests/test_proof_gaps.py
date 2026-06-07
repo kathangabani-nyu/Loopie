@@ -129,7 +129,8 @@ def test_cache_key_busts_on_artifact_hash_change():
 
 
 def test_weave_eval_error_is_surfaced_not_silent(monkeypatch):
-    monkeypatch.setenv("LOOPIE_LLM_MODE", "live")
+    monkeypatch.setenv("LOOPIE_LLM_MODE", "mock")
+    monkeypatch.setenv("LOOPIE_WEAVE_ENABLED", "true")
     monkeypatch.setenv("WANDB_API_KEY", "test-key")
     get_settings.cache_clear()
 
@@ -142,11 +143,33 @@ def test_weave_eval_error_is_surfaced_not_silent(monkeypatch):
 
     monkeypatch.setattr("src.loopie.reliability.evals.asyncio.run", _boom)
 
-    result = evaluate_suite(label="baseline", redis=redis, ledger=ledger, limit=3, mode="live")
+    result = evaluate_suite(label="baseline", redis=redis, ledger=ledger, limit=3, mode="mock")
     assert result["weave_eval_error"] is not None
     assert "weave evaluation unavailable" in result["weave_eval_error"]
     assert result["weave_eval_id"] is None
     assert result["results"] == []
+
+
+def test_weave_tracing_enabled_in_mock_mode(monkeypatch):
+    monkeypatch.setenv("LOOPIE_LLM_MODE", "mock")
+    monkeypatch.setenv("LOOPIE_WEAVE_ENABLED", "true")
+    monkeypatch.setenv("WANDB_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    from src.loopie.observability import weave_tracing_enabled
+
+    assert weave_tracing_enabled() is True
+
+
+def test_weave_tracing_requires_explicit_flag(monkeypatch):
+    monkeypatch.setenv("LOOPIE_LLM_MODE", "mock")
+    monkeypatch.delenv("LOOPIE_WEAVE_ENABLED", raising=False)
+    monkeypatch.setenv("WANDB_API_KEY", "test-key")
+    get_settings.cache_clear()
+
+    from src.loopie.observability import weave_tracing_enabled
+
+    assert weave_tracing_enabled() is False
 
 
 @pytest.mark.integration

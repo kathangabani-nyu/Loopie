@@ -7,27 +7,28 @@ Zero-cost hosted stack: **Vercel (Next.js + CopilotKit UI) → Render (`loopie-a
 ```text
 Browser
   ├─ Next.js cockpit buttons → /api/loopie/* → LOOPIE_API_BASE (loopie-api)
-  └─ CopilotKit side chat → AGENT_URL (loopie-agent, live GPT-5.5)
+  └─ CopilotKit side chat → AGENT_URL (loopie-agent, live GPT via LOOPIE_OPENAI_MODEL)
 
-loopie-api (Render, mock pipeline — $0 proof path)
+loopie-api (Render, deterministic proof path)
   ├─ LangGraph worker swarm (triage → memory → policy → resolution → evaluator)
   ├─ Loopie supervisor pipeline (diagnose → propose → HITL approve → rerun)
   ├─ Redis Cloud (live artifacts + event streams)
   ├─ Neon Postgres (artifact Time Machine + cost ledger)
-  └─ Weave (live-mode traces/evals only)
+  └─ Weave (traces/evals when LOOPIE_WEAVE_ENABLED=true — independent of LLM mode)
 
 loopie-agent (Render, live chat only)
-  ├─ CopilotKit control agent (gpt-5.5, metered)
+  ├─ CopilotKit control agent `loopie_control` (provider-registry model, metered)
   └─ HTTP tools → LOOPIE_API_BASE (same state as cockpit buttons)
 ```
 
-**Demo proof path** (baseline → fix → counterfactual) runs through **cockpit buttons → `loopie-api`** (`LOOPIE_LLM_MODE=mock`). **Live chat** is additive via **`loopie-agent`** and requires **`OPENAI_API_KEY`**.
+**Public proof path** (baseline → fix → counterfactual) runs through **cockpit buttons → `loopie-api`** with **`LOOPIE_LLM_MODE=mock`** and **`LOOPIE_WEAVE_ENABLED=true`**. Decisions stay deterministic; Weave records why baseline failed and how patched improved. **Live OpenAI decisions** on the pipeline are opt-in rehearsal only (`LOOPIE_LLM_MODE=live` + `LOOPIE_LIVE_CONFIRMED=1`). **Live chat** is additive via **`loopie-agent`** and requires **`OPENAI_API_KEY`**.
 
 ## Default demo mode (judging-safe)
 
 | Variable | Hosted default | Purpose |
 |----------|----------------|---------|
 | `LOOPIE_LLM_MODE` | `mock` on **loopie-api** | Deterministic oracle decisions, zero token spend for proof |
+| `LOOPIE_WEAVE_ENABLED` | `true` on **loopie-api** | Weave traces/evals in mock mode when `WANDB_API_KEY` is set |
 | `LOOPIE_FULL_AGENTIC` | `false` | Live OpenAI decisions limited to whitelist cases |
 | `LOOPIE_HOSTED` | `1` | Require Redis + Postgres; no silent in-memory ledger |
 | `LOOPIE_PERSISTENCE_MODE` | `hosted` or `auto` | Durable audit trail for artifact proof |
@@ -44,7 +45,9 @@ loopie-agent (Render, live chat only)
 | `AGENT_URL` | **yes** (for live chat) | `https://loopie-agent.onrender.com` |
 | `OPENAI_API_KEY` | optional on Vercel | Only if CopilotKit runtime needs it server-side; never `NEXT_PUBLIC_*` |
 
-Do **not** expose `REDIS_URL`, `POSTGRES_URL`, `WANDB_API_KEY`, or provider keys to the browser. All Loopie cockpit actions go through `/api/loopie/*`.
+Do **not** expose `REDIS_URL`, `POSTGRES_URL`, `WANDB_API_KEY`, `WANDB_ENTITY`, or provider keys to the browser. All Loopie cockpit actions go through `/api/loopie/*`.
+
+CopilotKit chat targets graph **`loopie_control`** (not `sample_agent`). Cockpit proof buttons stay on the deterministic REST path.
 
 ### Render — `loopie-api` (FastAPI proof backend)
 
@@ -54,10 +57,13 @@ Deploy via Blueprint: `render.yaml` at repo root. Service `loopie-api` uses `roo
 |----------|----------|-------|
 | `LOOPIE_HOSTED` | yes | `1` |
 | `LOOPIE_LLM_MODE` | yes | `mock` for judging |
+| `LOOPIE_WEAVE_ENABLED` | yes | `true` for public Weave proof |
 | `REDIS_URL` | yes | Redis Cloud |
 | `POSTGRES_URL` | yes | Neon pooled URL |
-| `WANDB_API_KEY` | mock: no | Live Weave rehearsal |
-| `OPENAI_API_KEY` | mock: no | Not used when `LOOPIE_LLM_MODE=mock` |
+| `WANDB_API_KEY` | yes (Weave proof) | Required when `LOOPIE_WEAVE_ENABLED=true` |
+| `WANDB_ENTITY` | yes (Weave URLs) | Used in eval deep-links |
+| `WEAVE_PROJECT` | yes | `loopie` |
+| `OPENAI_API_KEY` | mock: no | Only for live rehearsal (`LOOPIE_LLM_MODE=live`) |
 
 **Start:** `uv run uvicorn loopie_server:app --host 0.0.0.0 --port $PORT`  
 **Health:** `GET /health`
@@ -95,23 +101,47 @@ Manually run **keep-warm** workflow before recording. Pings every 10 min keep bo
 
 ## Preflight
 
-`GET /preflight` (proxied at `/api/loopie/preflight`) returns Redis/Postgres/provider mode. Hosted: `ok: false` → HTTP 503.
+`GET /preflight` (proxied at `/api/loopie/preflight`) returns Redis/Postgres/provider mode and `weave_enabled` (true when `LOOPIE_WEAVE_ENABLED=true` and `WANDB_API_KEY` is set). Hosted: `ok: false` → HTTP 503.
 
 ## Deploy checklist
 
-1. **Render secrets (both services):** `REDIS_URL`, `POSTGRES_URL`, `WANDB_API_KEY`, `OPENAI_API_KEY` (required on **loopie-agent**).
-2. **loopie-agent env:** `LOOPIE_API_BASE=https://loopie-api.onrender.com`, `LOOPIE_OPENAI_MODEL=gpt-5.5`.
-3. **Vercel env:** `LOOPIE_API_BASE=https://loopie-api.onrender.com`, `AGENT_URL=https://loopie-agent.onrender.com`.
-4. **GitHub vars:** `RENDER_URL`, `AGENT_URL` → run keep-warm manually before demo.
-5. **Warm both services**, then on hosted URL run: **Reset → Baseline → Propose → Approve → Rerun + Compare → Counterfactual Replay**.
-6. Confirm: real non-pattern timings, Redis artifact proof in UI, counterfactual `no_regression: true`, optional live chat turn shows ledger chat cost.
+1. **Render secrets on loopie-api:** `REDIS_URL`, `POSTGRES_URL`, `WANDB_API_KEY`, `WANDB_ENTITY`.
+2. **loopie-api env:** `LOOPIE_WEAVE_ENABLED=true`, `LOOPIE_LLM_MODE=mock`, `WEAVE_PROJECT=loopie`.
+3. **Render secrets on loopie-agent:** `REDIS_URL`, `POSTGRES_URL`, `OPENAI_API_KEY`.
+4. **loopie-agent env:** `LOOPIE_API_BASE=https://loopie-api.onrender.com`, `LOOPIE_OPENAI_MODEL=gpt-5.5`.
+5. **Vercel env:** `LOOPIE_API_BASE=https://loopie-api.onrender.com`, `AGENT_URL=https://loopie-agent.onrender.com` (no W&B/Redis/Neon secrets).
+6. **GitHub vars:** `RENDER_URL`, `AGENT_URL` → run keep-warm manually before demo.
+7. **Warm both services**, then on hosted URL run: **Reset → Baseline → Propose → Approve → Rerun + Compare → Counterfactual Replay**.
+8. Confirm: real non-pattern timings, Redis artifact proof in UI, counterfactual `no_regression: true`, Weave eval URL with `WANDB_ENTITY`, optional live chat turn shows ledger chat cost.
+
+## Verification
+
+### Judged deterministic proof with W&B
+
+- **loopie-api:** `LOOPIE_LLM_MODE=mock`, `LOOPIE_WEAVE_ENABLED=true`, `WANDB_API_KEY` + `WANDB_ENTITY` set.
+- Run Reset → Baseline → Propose → Approve → Patched → Counterfactual.
+- Assert baseline fails, artifact proof has before/after hashes, patched improves, counterfactual has no regression.
+- Assert `weaveEvalBaseline` / `weaveEvalPatched` in state (or `/state`) include a valid `weave_project_url`.
+
+### Live OpenAI rehearsal (opt-in)
+
+- Temporarily set **`LOOPIE_LLM_MODE=live`** and **`LOOPIE_LIVE_CONFIRMED=1`** on **loopie-api only**.
+- Run hero case and neighbors; treat `decided_by="oracle_fallback"` or `fallback_used=true` as failure.
+- First live decision per whitelist case must have `decided_by="llm"` and `stop_reason="completed"` (cache hits OK after that).
+- Switch back to `mock` unless intentionally showing live pipeline decisions.
+
+### Chat path
+
+- Send one hosted CopilotKit chat turn (graph `loopie_control`).
+- Confirm it reaches **loopie-agent**, uses OpenAI via `LOOPIE_OPENAI_MODEL`, and writes chat cost to Neon.
+- Confirm cockpit proof buttons still call **loopie-api** and remain deterministic.
 
 ## Rehearsal checklist
 
 1. Deploy both Render services; confirm `/health` and `/ok`.
 2. Deploy Vercel with `LOOPIE_API_BASE` + `AGENT_URL`.
-3. `POST /reset` — baseline artifacts reseeded.
-4. Full mock proof path via cockpit buttons.
+3. `POST /reset` — baseline artifacts reseeded (Loopie keys only; chat-cost ledger preserved).
+4. Full mock + Weave proof path via cockpit buttons.
 5. One live chat turn (if `OPENAI_API_KEY` set on loopie-agent); confirm Budget panel chat line updates.
 
 ## Local parity
@@ -123,7 +153,7 @@ npm run dev:agent    # LangGraph :8123
 npm run dev          # Next.js UI
 ```
 
-Set `LOOPIE_API_BASE=http://localhost:8001` and `AGENT_URL=http://localhost:8123` locally.
+Set `LOOPIE_API_BASE=http://localhost:8001`, `AGENT_URL=http://localhost:8123`, and optionally `LOOPIE_WEAVE_ENABLED=true` with local `WANDB_API_KEY` for Weave parity.
 
 ## Test gates
 

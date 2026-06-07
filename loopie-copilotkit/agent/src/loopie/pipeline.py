@@ -75,11 +75,42 @@ class LoopiePipeline:
             category = classify_failure(scores, ticket)
             failure = {"case_id": case_id, "scores": scores, "category": category, "run": run}
             self.state["currentFailure"] = failure
+        else:
+            self.state["currentFailure"] = None
         eval_run_id = f"baseline_{uuid.uuid4().hex[:8]}"
         self.state["runs"][eval_run_id] = {"label": "baseline", "case_id": case_id, "run": run, "scores": scores}
         self.state["budget"] = run.get("budget", {})
         self.redis.xadd("evals", {"event": "baseline_complete", "case_id": case_id, "passed": passed})
-        return {"eval_run_id": eval_run_id, "passed": passed, "scores": scores, "failure": failure}
+        weave_eval = None
+        if not passed:
+            weave_eval = self._run_weave_eval_if_enabled(label="baseline")
+        payload = {"eval_run_id": eval_run_id, "passed": passed, "scores": scores, "failure": failure}
+        if weave_eval is not None:
+            payload["weave_eval"] = weave_eval
+        return payload
+
+    def _run_weave_eval_if_enabled(
+        self,
+        *,
+        label: str,
+        correction_id: str | None = None,
+        artifact_proof: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if not get_settings().weave_enabled:
+            return None
+        from src.loopie.reliability.evals import evaluate_suite
+
+        result = evaluate_suite(
+            label=label,
+            redis=self.redis,
+            ledger=self.ledger,
+            correction_id=correction_id,
+            artifact_proof=artifact_proof or self.state.get("artifactProof"),
+            mode=self._llm_mode(),
+        )
+        state_key = "weaveEvalBaseline" if label == "baseline" else "weaveEvalPatched"
+        self.state[state_key] = result
+        return result
 
     def propose_corrections(self) -> dict[str, Any]:
         failure = self.state.get("currentFailure")
@@ -133,7 +164,12 @@ class LoopiePipeline:
         }
         self.redis.xadd("evals", {"event": "patched_complete", "case_id": case_id, "passed": passed})
         artifact_proof = self.state.get("artifactProof")
-        return {
+        weave_eval = self._run_weave_eval_if_enabled(
+            label="patched",
+            correction_id=(artifact_proof or {}).get("correction_id"),
+            artifact_proof=artifact_proof,
+        )
+        payload = {
             "eval_run_id": eval_run_id,
             "passed": passed,
             "scores": scores,
@@ -141,6 +177,9 @@ class LoopiePipeline:
             "run": run,
             "artifact_proof": artifact_proof,
         }
+        if weave_eval is not None:
+            payload["weave_eval"] = weave_eval
+        return payload
 
     def counterfactual_replay_suite(self, *, hero_case_id: str = "security_001") -> dict[str, Any]:
         ticket = tickets_by_id()[hero_case_id]
@@ -195,6 +234,24 @@ class LoopiePipeline:
                 mismatches.append(case_id)
         return mismatches
 
+    @staticmethod
+    def _collect_incomplete_live_decisions(*runs: dict[str, Any] | None) -> list[str]:
+        """Live rehearsal must complete an LLM call before cache hits count as honest."""
+        incomplete: list[str] = []
+        for run in runs:
+            if not run:
+                continue
+            case_id = run.get("case_id", "")
+            if case_id not in LIVE_DECISION_CASES:
+                continue
+            if run.get("decided_by") != "llm":
+                continue
+            if run.get("cache_hit"):
+                continue
+            if run.get("stop_reason") != "completed":
+                incomplete.append(case_id)
+        return incomplete
+
     def get_artifact_history(self, key: str) -> list[dict[str, Any]]:
         return self.ledger.artifact_history(key)
 
@@ -216,8 +273,6 @@ class LoopiePipeline:
         os.environ["LOOPIE_LLM_MODE"] = mode
         if mode == "live":
             os.environ.setdefault("LOOPIE_LIVE_CONFIRMED", "1")
-        from src.loopie.reliability.evals import evaluate_suite
-
         self._refresh_settings()
 
         should_reset = reset if reset is not None else mode == "live"
@@ -226,34 +281,16 @@ class LoopiePipeline:
         else:
             self.seed()
 
-        eval_baseline: dict[str, Any] | None = None
-        eval_patched: dict[str, Any] | None = None
-        if mode == "live":
-            eval_baseline = evaluate_suite(
-                label="baseline",
-                redis=self.redis,
-                ledger=self.ledger,
-                mode=mode,
-            )
-
         baseline = self.run_baseline(case_id="security_001")
+        eval_baseline = self.state.get("weaveEvalBaseline")
         if not baseline.get("failure"):
             return {"ok": False, "step": "baseline", "detail": baseline, "eval_baseline": eval_baseline}
 
         proposal = self.propose_corrections()
         approved = self.approve_correction(proposal["id"])
         patched = self.run_patched(case_id="security_001")
+        eval_patched = self.state.get("weaveEvalPatched")
         counterfactual = self.counterfactual_replay_suite(hero_case_id="security_001")
-
-        if mode == "live":
-            eval_patched = evaluate_suite(
-                label="patched",
-                redis=self.redis,
-                ledger=self.ledger,
-                correction_id=proposal.get("id"),
-                artifact_proof=self.state.get("artifactProof"),
-                mode=mode,
-            )
 
         counterfactual_runs = [entry["run"] for entry in counterfactual.get("results", {}).values()]
         live_fallback_cases = self._collect_live_fallback_cases(
@@ -285,6 +322,9 @@ class LoopiePipeline:
         oracle_mismatch_cases = sorted(
             set(self._collect_oracle_mismatch_cases(*run_dicts, tickets=ticket_map))
         )
+        incomplete_live_cases = sorted(
+            set(self._collect_incomplete_live_decisions(*run_dicts, *eval_rows))
+        )
 
         weave_errors = [
             err
@@ -300,14 +340,16 @@ class LoopiePipeline:
         )
 
         core_ok = patched["passed"] and counterfactual["no_regression"]
+        weave_ok = True
+        if get_settings().weave_enabled:
+            weave_ok = len(weave_errors) == 0 and not weave_manual_fallback
         live_honest = (
             len(live_fallback_cases) == 0
             and len(dishonest_cases) == 0
             and len(oracle_mismatch_cases) == 0
-            and len(weave_errors) == 0
-            and not weave_manual_fallback
+            and len(incomplete_live_cases) == 0
         )
-        ok = core_ok and (live_honest if mode == "live" else True)
+        ok = core_ok and weave_ok and (live_honest if mode == "live" else True)
 
         return {
             "ok": ok,
@@ -321,6 +363,7 @@ class LoopiePipeline:
             "live_fallback_cases": live_fallback_cases,
             "dishonest_live_cases": dishonest_cases,
             "oracle_mismatch_cases": oracle_mismatch_cases,
+            "incomplete_live_cases": incomplete_live_cases,
             "weave_eval_errors": weave_errors,
             "weave_eval_used_manual_fallback": weave_manual_fallback,
             "budget": self.get_budget_status(),

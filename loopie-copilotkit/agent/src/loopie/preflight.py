@@ -12,8 +12,9 @@ from src.loopie.stores.redis_store import RedisStore
 
 
 def _weave_enabled() -> bool:
-    settings = get_settings()
-    return bool(os.getenv("WANDB_API_KEY")) and not settings.is_mock
+    from src.loopie.observability import weave_tracing_enabled
+
+    return weave_tracing_enabled()
 
 
 def _provider_mode() -> str:
@@ -57,6 +58,8 @@ def run_preflight(
         "postgres_reachable": postgres_reachable,
         "persistence_mode": persistence_mode,
         "weave_enabled": weave_enabled,
+        "weave_configured": bool(os.getenv("WANDB_API_KEY")),
+        "weave_flag": get_settings().weave_enabled,
         "provider_mode": provider_mode,
         "llm_mode": settings.llm_mode,
         "full_agentic": settings.full_agentic,

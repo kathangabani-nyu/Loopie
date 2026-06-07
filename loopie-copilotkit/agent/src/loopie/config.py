@@ -45,6 +45,7 @@ class LoopieSettings:
     redis_url: str
     postgres_url: str
     weave_project: str
+    weave_enabled: bool
     openai_model: str
 
     @property
@@ -77,5 +78,6 @@ def get_settings() -> LoopieSettings:
             "postgresql://intelligence:intelligence@localhost:5432/intelligence_app",
         ),
         weave_project=os.getenv("WEAVE_PROJECT", "loopie"),
+        weave_enabled=_env_bool("LOOPIE_WEAVE_ENABLED", False),
         openai_model=os.getenv("LOOPIE_OPENAI_MODEL", "gpt-4o-mini"),
     )
