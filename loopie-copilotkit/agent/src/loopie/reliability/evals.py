@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 from src.loopie.artifacts import apply_seed_artifacts_to_redis
 from src.loopie.config import get_settings
-from src.loopie.observability import ensure_weave, op, weave_eval_url
+from src.loopie.observability import _postprocess_inputs, ensure_weave, op, weave_eval_url
 from src.loopie.reliability.budget import BudgetTracker
 from src.loopie.reliability.scorers import SCORERS, run_passed, score_run
 from src.loopie.runner import load_tickets, run_ticket
@@ -63,7 +63,7 @@ def _build_weave_predictor(ctx: dict[str, Any]) -> Callable[..., dict[str, Any]]
     """Return a weave.op predictor required by weave.Evaluation.evaluate()."""
     import weave
 
-    @weave.op(name="evals.predict_row")
+    @weave.op(name="evals.predict_row", postprocess_inputs=_postprocess_inputs)
     def predict_row(ticket: dict[str, Any], artifact_version: str) -> dict[str, Any]:
         run = run_ticket(
             ticket,

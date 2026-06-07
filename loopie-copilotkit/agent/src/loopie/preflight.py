@@ -49,9 +49,17 @@ def run_preflight(
     postgres_reachable = ledger.ping()
     persistence_mode = ledger.persistence_mode
     weave_enabled = _weave_enabled()
+    weave_project_url = _weave_traces_url() if os.getenv("WANDB_API_KEY") else None
+    weave_required = settings.weave_enabled
+    weave_ready = (not weave_required) or (weave_enabled and bool(weave_project_url))
     provider_mode = _provider_mode()
 
-    hosted_requirements_met = redis_reachable and postgres_reachable and persistence_mode == "postgres"
+    hosted_requirements_met = (
+        redis_reachable
+        and postgres_reachable
+        and persistence_mode == "postgres"
+        and weave_ready
+    )
     ok = hosted_requirements_met if settings.hosted else True
 
     cursor_cfg = provider_registry().get("cursor")
@@ -66,7 +74,8 @@ def run_preflight(
         "weave_enabled": weave_enabled,
         "weave_configured": bool(os.getenv("WANDB_API_KEY")),
         "weave_flag": get_settings().weave_enabled,
-        "weave_project_url": _weave_traces_url() if os.getenv("WANDB_API_KEY") else None,
+        "weave_project_url": weave_project_url,
+        "weave_dashboard_ready": bool(weave_project_url),
         "provider_mode": provider_mode,
         "llm_mode": settings.llm_mode,
         "full_agentic": settings.full_agentic,
@@ -83,8 +92,11 @@ def assert_hosted_ready(*, redis: RedisStore | None = None, ledger: Ledger | Non
             missing.append("redis")
         if not report["postgres_reachable"] or report["persistence_mode"] != "postgres":
             missing.append("postgres")
+        if report["weave_flag"] and not report["weave_dashboard_ready"]:
+            missing.append("wandb/weave dashboard")
         raise RuntimeError(
             "Hosted Loopie preflight failed — audit persistence requires "
-            f"{', '.join(missing)}. Set REDIS_URL and POSTGRES_URL or disable LOOPIE_HOSTED."
+            f"{', '.join(missing)}. Set REDIS_URL, POSTGRES_URL, WANDB_API_KEY, "
+            "and WANDB_ENTITY or disable LOOPIE_HOSTED."
         )
     return report

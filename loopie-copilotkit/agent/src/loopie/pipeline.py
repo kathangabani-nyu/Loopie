@@ -164,6 +164,13 @@ class LoopiePipeline:
             )
             state_key = "weaveEvalBaseline" if label == "baseline" else "weaveEvalPatched"
             self.state[state_key] = result
+            if result.get("weave_eval_error"):
+                raise RuntimeError(f"W&B Weave eval failed for {label}: {result['weave_eval_error']}")
+            if not result.get("weave_project_url"):
+                raise RuntimeError(
+                    f"W&B Weave eval for {label} did not produce a dashboard URL. "
+                    "Set WANDB_ENTITY and confirm the eval is visible in W&B."
+                )
             return result
 
         return self._timed(f"weave_eval_{label}", _do)

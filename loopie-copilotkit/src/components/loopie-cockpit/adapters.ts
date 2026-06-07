@@ -445,10 +445,6 @@ export function buildWeaveProofView(state: LoopieState): WeaveProofView | null {
   const enabled = Boolean(state.preflight?.weave_enabled);
   if (!enabled && !baseline && !patched) return null;
 
-  const manualFallback = Boolean(
-    baseline?.weave_eval_used_manual_fallback || patched?.weave_eval_used_manual_fallback,
-  );
-
   return {
     enabled,
     tracesUrl: state.preflight?.weave_project_url || null,
@@ -456,7 +452,7 @@ export function buildWeaveProofView(state: LoopieState): WeaveProofView | null {
     patchedUrl: patched?.weave_project_url || null,
     baselineError: baseline?.weave_eval_error || null,
     patchedError: patched?.weave_eval_error || null,
-    manualFallback,
+    manualFallback: false,
   };
 }
 

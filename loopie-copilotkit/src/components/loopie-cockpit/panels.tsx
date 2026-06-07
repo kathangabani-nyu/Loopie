@@ -132,9 +132,6 @@ export function WeaveProofPanel({ proof }: { proof: WeaveProofView }) {
           )}
         </div>
       </div>
-      {proof.manualFallback ? (
-        <div className="weave-proof-note">Manual eval fallback — set LOOPIE_WEAVE_ENABLED and WANDB creds on loopie-api.</div>
-      ) : null}
     </div>
   );
 }
