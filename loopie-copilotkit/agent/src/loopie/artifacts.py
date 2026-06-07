@@ -18,6 +18,53 @@ def artifact_content_hash(artifacts: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
+def artifact_value_hash(value: Any) -> str:
+    """Stable short hash of a single artifact document value."""
+    payload = json.dumps(value, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def artifact_structured_diff(before: Any, after: Any) -> list[dict[str, Any]]:
+    """Concrete before/after diff for proof payloads and cockpit display."""
+    if before == after:
+        return []
+
+    if isinstance(before, dict) and isinstance(after, dict):
+        changes: list[dict[str, Any]] = []
+        keys = sorted(set(before) | set(after))
+        for key in keys:
+            b_val = before.get(key)
+            a_val = after.get(key)
+            if b_val == a_val:
+                continue
+            if isinstance(b_val, dict) and isinstance(a_val, dict):
+                nested = artifact_structured_diff(b_val, a_val)
+                if nested:
+                    changes.append({"path": key, "changes": nested})
+            elif isinstance(b_val, list) and isinstance(a_val, list):
+                changes.append({"path": key, "before": b_val, "after": a_val})
+            else:
+                changes.append({"path": key, "before": b_val, "after": a_val})
+        return changes
+
+    return [{"path": ".", "before": before, "after": after}]
+
+
+def build_artifact_proof(
+    *,
+    correction_id: str | None,
+    before_value: Any | None,
+    after_value: Any,
+) -> dict[str, Any]:
+    """Proof bundle consumed by cockpit, Weave leaderboards, and eval payloads."""
+    return {
+        "correction_id": correction_id,
+        "before_hash": artifact_value_hash(before_value) if before_value is not None else None,
+        "after_hash": artifact_value_hash(after_value),
+        "diff": artifact_structured_diff(before_value, after_value) if before_value is not None else [],
+    }
+
+
 def snapshot_redis_artifacts(redis: RedisStore) -> dict[str, Any]:
     """Capture Redis artifact state for later restore."""
     return {

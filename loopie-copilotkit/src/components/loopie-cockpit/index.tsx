@@ -3,6 +3,8 @@
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useLoopieCockpit } from "@/hooks/use-loopie-cockpit";
+
 import "./cockpit.css";
 import "./components.css";
 
@@ -28,7 +30,7 @@ import {
   IdleNote,
   Panel,
 } from "./panels";
-import type { LoopieState, Phase } from "./types";
+import type { Phase } from "./types";
 import { BudgetMeter, CausalityTrace, EvalDelta, Scorecard, TimeMachine, VerdictStrip } from "./viz";
 
 async function post(action: string, body: Record<string, unknown> = {}) {
@@ -45,9 +47,8 @@ async function post(action: string, body: Record<string, unknown> = {}) {
 }
 
 export function LoopieCockpit() {
-  const [state, setState] = useState<LoopieState>({});
+  const { state, error, refresh, runAction, useAgentState, agentRunning } = useLoopieCockpit();
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [wiping, setWiping] = useState(false);
   const [autopilot, setAutopilot] = useState(false);
   const apRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -57,52 +58,26 @@ export function LoopieCockpit() {
   const idx = PHASES.indexOf(phase);
   const live = LIVE[phase] || {};
 
-  const refresh = useCallback(async () => {
-    const res = await fetch("/api/loopie/state");
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(
-        typeof data.error === "string"
-          ? data.error
-          : "Loopie API unavailable - run `npm run dev:loopie` on port 8001.",
-      );
-    }
-    setState(await res.json());
-  }, []);
-
   useEffect(() => {
-    refresh().catch((err: unknown) => {
-      setError(err instanceof Error ? err.message : "Failed to load Loopie state");
-    });
-  }, [refresh]);
-
-  useEffect(() => {
-    if (error) return;
+    if (useAgentState || error) return;
     const iv = setInterval(() => {
       refresh().catch(() => {});
     }, 4000);
     return () => clearInterval(iv);
-  }, [refresh, error]);
+  }, [refresh, error, useAgentState]);
 
-  const runAction = useCallback(
+  const runActionWrapped = useCallback(
     async (action: string, body: Record<string, unknown> = {}) => {
       setLoading(true);
-      setError(null);
       try {
-        if (action === "approve" && !body.correction_id) {
-          const correctionId = state.proposedCorrections?.[0]?.id;
-          if (!correctionId) throw new Error("No correction to approve");
-          body = { correction_id: correctionId };
-        }
-        await post(action, body);
-        await refresh();
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Action failed");
+        await runAction(action, body);
+      } catch {
+        /* surfaced via hook error */
       } finally {
         setLoading(false);
       }
     },
-    [refresh, state.proposedCorrections],
+    [runAction],
   );
 
   const advance = useCallback(
@@ -113,9 +88,9 @@ export function LoopieCockpit() {
       if (cmd.action === "approve") {
         body.correction_id = state.proposedCorrections?.[0]?.id;
       }
-      void runAction(cmd.action, body);
+      void runActionWrapped(cmd.action, body);
     },
-    [runAction, state.proposedCorrections],
+    [runActionWrapped, state.proposedCorrections],
   );
 
   const doReset = useCallback(() => {
@@ -123,8 +98,7 @@ export function LoopieCockpit() {
     setWiping(true);
     void post("reset").catch(() => {});
     setTimeout(() => {
-      setState({});
-      setError(null);
+      void refresh().catch(() => {});
     }, 360);
     setTimeout(() => {
       setWiping(false);
@@ -241,7 +215,7 @@ export function LoopieCockpit() {
                     display: "inline-block",
                   }}
                 />
-                api <b>{error ? "offline" : "live"}</b>
+                {useAgentState ? "agent" : "api"} <b>{error ? "offline" : "live"}</b>
               </div>
             </div>
 
@@ -272,7 +246,7 @@ export function LoopieCockpit() {
                     key={c.id}
                     type="button"
                     className={`cmd${isNext ? " armed" : ""}`}
-                    disabled={!isNext || loading}
+                    disabled={!isNext || loading || agentRunning}
                     onClick={(e) => {
                       ripple(e);
                       advance(c.id);

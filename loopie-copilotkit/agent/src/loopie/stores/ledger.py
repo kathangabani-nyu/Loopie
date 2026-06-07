@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS loopie.artifact_versions (
 CREATE TABLE IF NOT EXISTS loopie.cost_ledger (
     id SERIAL PRIMARY KEY,
     run_id TEXT NOT NULL,
+    provider TEXT,
     model TEXT,
     prompt_tokens INT NOT NULL DEFAULT 0,
     completion_tokens INT NOT NULL DEFAULT 0,
@@ -89,20 +90,43 @@ class Ledger:
     url: str
     _memory_rows: list[dict[str, Any]]
     _memory_costs: list[dict[str, Any]]
+    _postgres_ok: bool = False
 
     @classmethod
-    def connect(cls, url: str | None = None) -> Ledger:
-        ledger = cls(url=url or get_settings().postgres_url, _memory_rows=[], _memory_costs=[])
+    def connect(cls, url: str | None = None, *, strict: bool | None = None) -> Ledger:
+        settings = get_settings()
+        require_postgres = strict if strict is not None else settings.requires_durable_stores
+        ledger = cls(url=url or settings.postgres_url, _memory_rows=[], _memory_costs=[])
         ledger.ensure_schema()
+        if require_postgres and not ledger.ping():
+            raise RuntimeError(
+                "Postgres is unreachable — hosted Loopie requires durable artifact audit storage. "
+                "Set POSTGRES_URL or use LOOPIE_PERSISTENCE_MODE=memory for local dev only."
+            )
         return ledger
+
+    @property
+    def persistence_mode(self) -> str:
+        return "postgres" if self._postgres_ok else "memory"
+
+    def ping(self) -> bool:
+        try:
+            with psycopg.connect(self.url) as conn:
+                conn.execute("SELECT 1")
+            self._postgres_ok = True
+            return True
+        except Exception:
+            self._postgres_ok = False
+            return False
 
     def ensure_schema(self) -> None:
         try:
             with psycopg.connect(self.url) as conn:
                 conn.execute(SCHEMA_SQL)
                 conn.commit()
+            self._postgres_ok = True
         except Exception:
-            pass
+            self._postgres_ok = False
 
     def _connect(self):
         return psycopg.connect(self.url, row_factory=dict_row)
@@ -174,6 +198,7 @@ class Ledger:
         self,
         *,
         run_id: str,
+        provider: str | None = None,
         model: str,
         prompt_tokens: int,
         completion_tokens: int,
@@ -184,6 +209,7 @@ class Ledger:
     ) -> None:
         row = {
             "run_id": run_id,
+            "provider": provider,
             "model": model,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
@@ -197,9 +223,9 @@ class Ledger:
                 conn.execute(
                     """
                     INSERT INTO loopie.cost_ledger
-                    (run_id, model, prompt_tokens, completion_tokens, total_tokens,
+                    (run_id, provider, model, prompt_tokens, completion_tokens, total_tokens,
                      estimated_cost, stop_reason, mode)
-                    VALUES (%(run_id)s, %(model)s, %(prompt_tokens)s, %(completion_tokens)s,
+                    VALUES (%(run_id)s, %(provider)s, %(model)s, %(prompt_tokens)s, %(completion_tokens)s,
                             %(total_tokens)s, %(estimated_cost)s, %(stop_reason)s, %(mode)s)
                     """,
                     row,
@@ -207,6 +233,25 @@ class Ledger:
                 conn.commit()
         except Exception:
             self._memory_costs.append(row)
+
+    def cost_by_provider(self) -> dict[str, float]:
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT COALESCE(provider, 'unknown') AS provider,
+                           COALESCE(SUM(estimated_cost), 0) AS total
+                    FROM loopie.cost_ledger
+                    GROUP BY provider
+                    """
+                ).fetchall()
+                return {str(r["provider"]): float(r["total"]) for r in rows}
+        except Exception:
+            totals: dict[str, float] = {}
+            for row in self._memory_costs:
+                key = str(row.get("provider") or "unknown")
+                totals[key] = totals.get(key, 0.0) + float(row.get("estimated_cost", 0))
+            return totals
 
     def total_cost(self, *, mode: str | None = None) -> float:
         try:

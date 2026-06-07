@@ -20,3 +20,9 @@ class LoopieState(TypedDict, total=False):
     run_id: str
     budget_guard_triggered: bool
     mode: str
+    decided_by: str
+    fallback_used: bool
+    decision_schema_version: str
+    prompt_version: str
+    cache_hit: bool
+    execution_engine: str

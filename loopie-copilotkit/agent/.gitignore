@@ -7,3 +7,4 @@ __pycache__/
 # python
 .venv/
 .langgraph_api/
+.cursor_smoke_ok

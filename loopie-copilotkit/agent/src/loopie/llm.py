@@ -14,6 +14,7 @@ from src.loopie.artifacts import artifact_content_hash
 from src.loopie.config import get_settings
 from src.loopie.decide import ALLOWED_ACTIONS, decide_action
 from src.loopie.observability import op
+from src.loopie.providers import ProviderConfig, openai_client_kwargs, provider_registry, resolve_provider, role_provider_chain
 from src.loopie.reliability.budget import BudgetTracker
 from src.loopie.stores.llm_cache import cache_key, get_cached, set_cached
 
@@ -25,7 +26,7 @@ _SECURITY_GUARD_RULE = "security_flag_blocks_refund"
 NARRATION_PROMPT_VERSION = "v1"
 DECISION_PROMPT_VERSION = "v1"
 DECISION_SCHEMA_VERSION = "v1"
-LLM_PROVIDER = "openai"
+DEFAULT_PROVIDER = "openai"
 
 
 def _refund_window_days(artifacts: dict[str, Any] | None) -> int | None:
@@ -60,10 +61,10 @@ def mock_narration(
 
     if node == "triage":
         if security_flag:
-            return f"triage [{case_id}]: payment/refund requested with security_flag RAISED — routing to policy + resolution."
+            return f"triage [{case_id}]: payment/refund requested with security_flag RAISED - routing to policy + resolution."
         if failure_seed == "planner_loop":
-            return f"triage [{case_id}]: refund missing policy-version metadata — routing to policy lookup."
-        return f"triage [{case_id}]: refund request · {days}d since purchase · {tier} tier — routing to policy + resolution."
+            return f"triage [{case_id}]: refund missing policy-version metadata - routing to policy lookup."
+        return f"triage [{case_id}]: refund request, {days}d since purchase, {tier} tier - routing to policy + resolution."
 
     if node == "memory_lookup":
         window = _refund_window_days(artifacts)
@@ -76,7 +77,7 @@ def mock_narration(
             state = "ACTIVE" if _has_security_guard(artifacts) else "MISSING"
             return f"policy_check [{case_id}]: security guard '{_SECURITY_GUARD_RULE}' = {state}."
         if must_check:
-            return f"policy_check [{case_id}]: ticket requires a fresh policy version — verifying provenance."
+            return f"policy_check [{case_id}]: ticket requires a fresh policy version - verifying provenance."
         return f"policy_check [{case_id}]: standard refund guards evaluated, none blocking."
 
     if node == "resolution":
@@ -85,12 +86,12 @@ def mock_narration(
 
             action = decide_action(ticket, artifacts or {})
             tools = ", ".join(c["name"] for c in decide_tool_calls(action)) or "no tool"
-            return f"resolution [{case_id}]: decision → {action} (calls: {tools})."
+            return f"resolution [{case_id}]: decision -> {action} (calls: {tools})."
         except Exception:
             return f"resolution [{case_id}]: selected resolution action based on policy state."
 
     if node == "evaluator":
-        return f"evaluator [{case_id}]: grading against deterministic scorers (action_match, unauthorized_tool_call, …)."
+        return f"evaluator [{case_id}]: grading against deterministic scorers (action_match, unauthorized_tool_call, ...)."
 
     return f"Mock narration for {node} [{case_id}]."
 
@@ -154,6 +155,40 @@ class LLMGateway:
         self.budget = budget or BudgetTracker()
         self.ledger = ledger
         self.eval_scope = eval_scope
+        self._registry = provider_registry()
+        self._active_provider = resolve_provider("decision", self._registry)
+
+    def _provider_chain(self, role: str) -> list[str]:
+        return role_provider_chain(role)
+
+    def _provider_config(self, name: str):
+        return self._registry.get(name)
+
+    def _enabled_providers(self, role: str) -> list[tuple[ProviderConfig, str]]:
+        providers: list[tuple[ProviderConfig, str]] = []
+        for name in self._provider_chain(role):
+            cfg = self._provider_config(name)
+            if cfg and cfg.enabled and cfg.api_key:
+                providers.append((cfg, name))
+        return providers
+
+    def _require_live_providers(self, role: str) -> list[tuple[ProviderConfig, str]]:
+        providers = self._enabled_providers(role)
+        if not providers:
+            raise RuntimeError(
+                "Live LLM mode requires at least one enabled provider with an API key "
+                f"(chain: {self._provider_chain(role)})"
+            )
+        return providers
+
+    def _chat_model(self, role: str):
+        from langchain_openai import ChatOpenAI
+
+        providers = self._enabled_providers(role)
+        if providers:
+            cfg, name = providers[0]
+            return ChatOpenAI(**openai_client_kwargs(cfg)), name
+        raise RuntimeError("No enabled LLM provider with API key")
 
     @op("gateway.narrate")
     def narrate(
@@ -237,27 +272,29 @@ class LLMGateway:
             raise RuntimeError(
                 "Live LLM calls require LOOPIE_LLM_MODE=live and LOOPIE_LIVE_CONFIRMED=1"
             )
-        if not os.getenv("OPENAI_API_KEY"):
-            raise RuntimeError("OPENAI_API_KEY is required for live LLM mode")
 
+        providers = self._require_live_providers("decision")
         art_hash = artifact_content_hash(artifacts)
-        key = cache_key(
-            model=self.settings.openai_model,
-            node="decision",
-            fixture_id=fixture_id,
-            artifact_version=artifact_version,
-            provider=LLM_PROVIDER,
-            prompt_version=DECISION_PROMPT_VERSION,
-            schema_version=DECISION_SCHEMA_VERSION,
-            artifact_hash=art_hash,
-        )
-        cached = get_cached(key)
-        if cached is not None:
+
+        for cfg, provider_name in providers:
+            key = cache_key(
+                model=cfg.model,
+                node="decision",
+                fixture_id=fixture_id,
+                artifact_version=artifact_version,
+                provider=provider_name,
+                prompt_version=DECISION_PROMPT_VERSION,
+                schema_version=DECISION_SCHEMA_VERSION,
+                artifact_hash=art_hash,
+            )
+            cached = get_cached(key)
+            if cached is None:
+                continue
             payload = json.loads(cached)
             result = LLMDecisionResult(
                 action=payload["action"],
                 mode="live",
-                model=self.settings.openai_model,
+                model=cfg.model,
                 decided_by="llm",
                 fallback_used=False,
                 security_guard_observed=payload.get("security_guard_observed", False),
@@ -270,7 +307,7 @@ class LLMGateway:
                 stop_reason="cache_hit",
                 from_cache=True,
             )
-            self._record_decision(result, run_id=fixture_id)
+            self._record_decision(result, run_id=fixture_id, provider=provider_name)
             return result
 
         if self.budget.budget_guard_triggered:
@@ -279,75 +316,85 @@ class LLMGateway:
                 artifacts=artifacts,
                 fixture_id=fixture_id,
                 stop_reason=self.budget.stop_reason or "budget_guard",
+                provider_name=providers[0][1],
             )
 
         prompt = self._build_decision_prompt(ticket, artifacts)
-        try:
-            from langchain_openai import ChatOpenAI
-
-            model = ChatOpenAI(
-                model=self.settings.openai_model,
-                temperature=0,
-                model_kwargs={"seed": self.settings.llm_seed},
-            )
-            structured = model.with_structured_output(DecisionSchema, strict=True, include_raw=True)
-            raw_result = structured.invoke(prompt)
-            if isinstance(raw_result, dict) and "parsed" in raw_result:
-                parsed: DecisionSchema = raw_result["parsed"]
-                response = raw_result.get("raw")
-            else:
-                parsed = raw_result
-                response = None
-
-            action = parsed.action.value if hasattr(parsed.action, "value") else str(parsed.action)
-            if action not in ALLOWED_ACTIONS:
-                return self._oracle_fallback(
-                    oracle_action=oracle_action,
-                    artifacts=artifacts,
-                    fixture_id=fixture_id,
-                    stop_reason="invalid_action_enum",
-                )
-
-            payload = {
-                "action": action,
-                "security_guard_observed": parsed.security_guard_observed,
-                "artifact_basis": parsed.artifact_basis,
-                "reason": parsed.reason,
-            }
-            set_cached(key, json.dumps(payload))
-
-            if response is not None:
-                prompt_tokens, completion_tokens, total_tokens, cost = self._usage_from_response(
-                    response, prompt, json.dumps(payload)
-                )
-            else:
-                prompt_tokens, completion_tokens, total_tokens, cost = self._estimate_usage(prompt, payload)
-            self.budget.record_llm_call(eval_scope=self.eval_scope, cost_usd=cost)
-
-            result = LLMDecisionResult(
-                action=action,
-                mode="live",
-                model=self.settings.openai_model,
-                decided_by="llm",
-                fallback_used=False,
-                security_guard_observed=parsed.security_guard_observed,
-                artifact_basis=list(parsed.artifact_basis),
-                reason=parsed.reason,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-                estimated_cost_usd=cost,
-                stop_reason="completed",
-            )
-            self._record_decision(result, run_id=fixture_id)
-            return result
-        except Exception:
-            return self._oracle_fallback(
-                oracle_action=oracle_action,
-                artifacts=artifacts,
+        last_stop_reason = "all_providers_failed"
+        for cfg, provider_name in providers:
+            key = cache_key(
+                model=cfg.model,
+                node="decision",
                 fixture_id=fixture_id,
-                stop_reason="structured_output_failed",
+                artifact_version=artifact_version,
+                provider=provider_name,
+                prompt_version=DECISION_PROMPT_VERSION,
+                schema_version=DECISION_SCHEMA_VERSION,
+                artifact_hash=art_hash,
             )
+            try:
+                from langchain_openai import ChatOpenAI
+
+                model = ChatOpenAI(**openai_client_kwargs(cfg))
+                model = model.bind(model_kwargs={"seed": self.settings.llm_seed})
+                structured = model.with_structured_output(DecisionSchema, strict=True, include_raw=True)
+                raw_result = structured.invoke(prompt)
+                if isinstance(raw_result, dict) and "parsed" in raw_result:
+                    parsed: DecisionSchema = raw_result["parsed"]
+                    response = raw_result.get("raw")
+                else:
+                    parsed = raw_result
+                    response = None
+
+                action = parsed.action.value if hasattr(parsed.action, "value") else str(parsed.action)
+                if action not in ALLOWED_ACTIONS:
+                    last_stop_reason = f"invalid_action_enum:{provider_name}"
+                    continue
+
+                payload = {
+                    "action": action,
+                    "security_guard_observed": parsed.security_guard_observed,
+                    "artifact_basis": parsed.artifact_basis,
+                    "reason": parsed.reason,
+                }
+                set_cached(key, json.dumps(payload))
+
+                if response is not None:
+                    prompt_tokens, completion_tokens, total_tokens, cost = self._usage_from_response(
+                        response, prompt, json.dumps(payload)
+                    )
+                else:
+                    prompt_tokens, completion_tokens, total_tokens, cost = self._estimate_usage(prompt, payload)
+                self.budget.record_llm_call(eval_scope=self.eval_scope, cost_usd=cost)
+
+                result = LLMDecisionResult(
+                    action=action,
+                    mode="live",
+                    model=cfg.model,
+                    decided_by="llm",
+                    fallback_used=False,
+                    security_guard_observed=parsed.security_guard_observed,
+                    artifact_basis=list(parsed.artifact_basis),
+                    reason=parsed.reason,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    estimated_cost_usd=cost,
+                    stop_reason="completed",
+                )
+                self._record_decision(result, run_id=fixture_id, provider=provider_name)
+                return result
+            except Exception as exc:
+                last_stop_reason = f"{provider_name}_failed:{type(exc).__name__}"
+                continue
+
+        return self._oracle_fallback(
+            oracle_action=oracle_action,
+            artifacts=artifacts,
+            fixture_id=fixture_id,
+            stop_reason=last_stop_reason,
+            provider_name=providers[-1][1],
+        )
 
     def _oracle_fallback(
         self,
@@ -356,11 +403,18 @@ class LLMGateway:
         artifacts: dict[str, Any],
         fixture_id: str,
         stop_reason: str,
+        provider_name: str | None = None,
     ) -> LLMDecisionResult:
+        if provider_name is None:
+            active = self._active_provider
+            provider_name = active.name if active else DEFAULT_PROVIDER
+        cfg = self._provider_config(provider_name)
+        model_name = cfg.model if cfg else self.settings.openai_model
+
         result = LLMDecisionResult(
             action=oracle_action,
             mode="live",
-            model=self.settings.openai_model,
+            model=model_name,
             decided_by="oracle_fallback",
             fallback_used=True,
             security_guard_observed=_has_security_guard(artifacts),
@@ -372,7 +426,7 @@ class LLMGateway:
             estimated_cost_usd=0.0,
             stop_reason=stop_reason,
         )
-        self._record_decision(result, run_id=fixture_id)
+        self._record_decision(result, run_id=fixture_id, provider=provider_name)
         return result
 
     def _live_completion(
@@ -388,25 +442,27 @@ class LLMGateway:
             raise RuntimeError(
                 "Live LLM calls require LOOPIE_LLM_MODE=live and LOOPIE_LIVE_CONFIRMED=1"
             )
-        if not os.getenv("OPENAI_API_KEY"):
-            raise RuntimeError("OPENAI_API_KEY is required for live LLM mode")
 
-        key = cache_key(
-            model=self.settings.openai_model,
-            node=node,
-            fixture_id=fixture_id,
-            artifact_version=artifact_version,
-            provider=LLM_PROVIDER,
-            prompt_version=NARRATION_PROMPT_VERSION,
-            schema_version="n/a",
-            artifact_hash=artifact_hash,
-        )
-        cached = get_cached(key)
-        if cached is not None:
+        providers = self._require_live_providers("narration")
+
+        for cfg, provider_name in providers:
+            key = cache_key(
+                model=cfg.model,
+                node=node,
+                fixture_id=fixture_id,
+                artifact_version=artifact_version,
+                provider=provider_name,
+                prompt_version=NARRATION_PROMPT_VERSION,
+                schema_version="n/a",
+                artifact_hash=artifact_hash,
+            )
+            cached = get_cached(key)
+            if cached is None:
+                continue
             result = LLMResult(
                 text=cached,
                 mode="live",
-                model=self.settings.openai_model,
+                model=cfg.model,
                 prompt_tokens=0,
                 completion_tokens=0,
                 total_tokens=0,
@@ -414,21 +470,15 @@ class LLMGateway:
                 stop_reason="cache_hit",
                 from_cache=True,
             )
-            self._record(result, run_id=fixture_id)
+            self._record(result, run_id=fixture_id, provider=provider_name)
             return result
 
-        from langchain_openai import ChatOpenAI
-
-        model = ChatOpenAI(
-            model=self.settings.openai_model,
-            temperature=0,
-            model_kwargs={"seed": self.settings.llm_seed},
-        )
         if self.budget.budget_guard_triggered:
+            cfg, provider_name = providers[0]
             return LLMResult(
                 text="",
                 mode="live",
-                model=self.settings.openai_model,
+                model=cfg.model,
                 prompt_tokens=0,
                 completion_tokens=0,
                 total_tokens=0,
@@ -436,23 +486,57 @@ class LLMGateway:
                 stop_reason=self.budget.stop_reason or "budget_guard",
             )
 
-        response = model.invoke(prompt)
-        text = str(response.content)
-        prompt_tokens, completion_tokens, total_tokens, cost = self._usage_from_response(response, prompt, text)
-        self.budget.record_llm_call(eval_scope=self.eval_scope, cost_usd=cost)
-        set_cached(key, text)
-        result = LLMResult(
-            text=text,
+        last_error = "all_providers_failed"
+        for cfg, provider_name in providers:
+            key = cache_key(
+                model=cfg.model,
+                node=node,
+                fixture_id=fixture_id,
+                artifact_version=artifact_version,
+                provider=provider_name,
+                prompt_version=NARRATION_PROMPT_VERSION,
+                schema_version="n/a",
+                artifact_hash=artifact_hash,
+            )
+            try:
+                from langchain_openai import ChatOpenAI
+
+                model = ChatOpenAI(**openai_client_kwargs(cfg))
+                model = model.bind(model_kwargs={"seed": self.settings.llm_seed})
+                response = model.invoke(prompt)
+                text = str(response.content)
+                prompt_tokens, completion_tokens, total_tokens, cost = self._usage_from_response(
+                    response, prompt, text
+                )
+                self.budget.record_llm_call(eval_scope=self.eval_scope, cost_usd=cost)
+                set_cached(key, text)
+                result = LLMResult(
+                    text=text,
+                    mode="live",
+                    model=cfg.model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    estimated_cost_usd=cost,
+                    stop_reason="completed",
+                )
+                self._record(result, run_id=fixture_id, provider=provider_name)
+                return result
+            except Exception as exc:
+                last_error = f"{provider_name}_failed:{type(exc).__name__}"
+                continue
+
+        cfg, provider_name = providers[-1]
+        return LLMResult(
+            text="",
             mode="live",
-            model=self.settings.openai_model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            estimated_cost_usd=cost,
-            stop_reason="completed",
+            model=cfg.model,
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+            estimated_cost_usd=0.0,
+            stop_reason=last_error,
         )
-        self._record(result, run_id=fixture_id)
-        return result
 
     def _usage_from_response(self, response: Any, prompt: str, text: str) -> tuple[int, int, int, float]:
         usage = getattr(response, "usage_metadata", None) or {}
@@ -475,11 +559,12 @@ class LLMGateway:
         cost = total_tokens * 0.000002
         return prompt_tokens, completion_tokens, total_tokens, cost
 
-    def _record(self, result: LLMResult, *, run_id: str) -> None:
+    def _record(self, result: LLMResult, *, run_id: str, provider: str | None = None) -> None:
         if self.ledger is None:
             return
         self.ledger.record_cost(
             run_id=run_id,
+            provider=provider,
             model=result.model,
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
@@ -489,11 +574,12 @@ class LLMGateway:
             mode=result.mode,
         )
 
-    def _record_decision(self, result: LLMDecisionResult, *, run_id: str) -> None:
+    def _record_decision(self, result: LLMDecisionResult, *, run_id: str, provider: str | None = None) -> None:
         if self.ledger is None:
             return
         self.ledger.record_cost(
             run_id=run_id,
+            provider=provider,
             model=result.model,
             prompt_tokens=result.prompt_tokens,
             completion_tokens=result.completion_tokens,
@@ -538,8 +624,8 @@ class LLMGateway:
             "Rules:\n"
             "- If security_flag is true and a refund/payout is requested and security_flag_blocks_refund "
             "is present, prefer escalate_security.\n"
-            "- security_002 with guard present → block_refund_tool; security_003 → require_security_review.\n"
-            "- refund_001 or short-window refund → approve_refund.\n"
+            "- security_002 with guard present -> block_refund_tool; security_003 -> require_security_review.\n"
+            "- refund_001 or short-window refund -> approve_refund.\n"
             "- stale_refund_policy: compare days_since_purchase to refund_window_days.\n"
             "Return structured JSON only."
         )

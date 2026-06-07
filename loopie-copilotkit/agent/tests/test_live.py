@@ -83,6 +83,7 @@ live_opt_in = pytest.mark.skipif(
 )
 
 
+@pytest.mark.integration
 @live_opt_in
 def test_live_decision_equals_oracle_on_hero_and_neighbors(monkeypatch, memory_redis):
     monkeypatch.setenv("LOOPIE_LLM_MODE", "live")
@@ -112,6 +113,7 @@ def test_live_decision_equals_oracle_on_hero_and_neighbors(monkeypatch, memory_r
         assert run["fallback_used"] is False, f"{case_id}: oracle fallback must fail the differential test"
 
 
+@pytest.mark.integration
 @live_opt_in
 def test_replay_cache_hit_on_second_live_run(monkeypatch, memory_redis):
     monkeypatch.setenv("LOOPIE_LLM_MODE", "live")

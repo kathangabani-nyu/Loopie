@@ -14,6 +14,8 @@ def classify_failure(scores: dict[str, bool], ticket: dict[str, Any]) -> str:
             return "stale_memory"
         if seed == "planner_loop":
             return "looping_plan"
+        if seed == "vat_reverse_charge":
+            return "vat_reclassification"
         if ticket.get("security_flag"):
             return "missing_guard"
         return "unsafe_escalation"

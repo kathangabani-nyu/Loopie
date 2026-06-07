@@ -39,6 +39,9 @@ class LoopieSettings:
     max_eval_cases_per_dev_run: int
     max_estimated_cost_usd: float
     enable_replay_cache: bool
+    full_agentic: bool
+    hosted: bool
+    persistence_mode: str
     redis_url: str
     postgres_url: str
     weave_project: str
@@ -47,6 +50,10 @@ class LoopieSettings:
     @property
     def is_mock(self) -> bool:
         return self.llm_mode != "live"
+
+    @property
+    def requires_durable_stores(self) -> bool:
+        return self.hosted or self.persistence_mode == "hosted"
 
 
 @lru_cache(maxsize=1)
@@ -61,6 +68,9 @@ def get_settings() -> LoopieSettings:
         max_eval_cases_per_dev_run=_env_int("LOOPIE_MAX_EVAL_CASES_PER_DEV_RUN", 6),
         max_estimated_cost_usd=_env_float("LOOPIE_MAX_ESTIMATED_COST_USD", 0.25),
         enable_replay_cache=_env_bool("LOOPIE_ENABLE_REPLAY_CACHE", True),
+        full_agentic=_env_bool("LOOPIE_FULL_AGENTIC", False),
+        hosted=_env_bool("LOOPIE_HOSTED", False),
+        persistence_mode=os.getenv("LOOPIE_PERSISTENCE_MODE", "auto").strip().lower(),
         redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/1"),
         postgres_url=os.getenv(
             "POSTGRES_URL",

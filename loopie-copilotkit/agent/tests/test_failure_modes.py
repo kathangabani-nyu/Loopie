@@ -23,7 +23,12 @@ def test_stale_memory_correction_path():
     from src.loopie.reliability.scorers import run_passed, score_run
     from src.loopie.runner import run_ticket, tickets_by_id
 
-    pipeline = LoopiePipeline()
+    from memory_stores import MemoryLedger, MemoryRedis
+
+    pipeline = object.__new__(LoopiePipeline)
+    pipeline.redis = MemoryRedis()
+    pipeline.ledger = MemoryLedger()
+    pipeline.state = LoopiePipeline._initial_state()
     pipeline.seed()
     ticket = tickets_by_id()["refund_007"]
     baseline = run_ticket(ticket, redis=pipeline.redis, ledger=pipeline.ledger)

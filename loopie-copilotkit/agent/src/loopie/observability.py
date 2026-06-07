@@ -39,6 +39,16 @@ def _tracing_enabled() -> bool:
     return _weave_available and bool(os.getenv("WANDB_API_KEY")) and not get_settings().is_mock
 
 
+def weave_eval_url(eval_id: str, *, entity: str | None = None, project: str | None = None) -> str:
+    """Deep-link into Weave Compare/Leaderboard for cockpit surfacing."""
+    settings = get_settings()
+    entity = entity or os.getenv("WANDB_ENTITY", "")
+    project = project or settings.weave_project
+    if entity:
+        return f"https://wandb.ai/{entity}/{project}/weave/evaluations/{eval_id}"
+    return f"https://wandb.ai/{project}/weave/evaluations/{eval_id}"
+
+
 def op(name: str) -> Callable[[F], F]:
     """Decorate with weave.op only when live + W&B creds are present."""
 

@@ -209,17 +209,26 @@ export function buildCorrectionView(state: LoopieState): CorrectionView | null {
           ? String(proposal.key || "config")
           : raw.category || "artifact";
 
+  const proof = state.artifactProof;
+  const proofDiff =
+    proof?.diff?.map((entry) => ({
+      t: "ctx" as const,
+      l: JSON.stringify(entry),
+    })) || [];
+
   return {
     id: raw.id,
     title: raw.summary || "Structured correction proposal",
-    rationale: raw.summary || "",
+    rationale: (raw as { diagnosis?: string }).diagnosis || raw.summary || "",
     confidence: type === "manual_review" ? 0.5 : 0.91,
     risk: type === "routing_rule" || type === "memory_update" ? "low" : "medium",
     target,
     artifact: target,
-    diff: buildDiffFromProposal(type, proposal),
+    diff: proofDiff.length ? proofDiff : buildDiffFromProposal(type, proposal),
     blast: buildBlastRadius(type),
     approved: state.approvalState === "approved",
+    beforeHash: proof?.before_hash || undefined,
+    afterHash: proof?.after_hash || undefined,
   };
 }
 

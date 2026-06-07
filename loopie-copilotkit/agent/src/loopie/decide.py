@@ -76,6 +76,12 @@ def decide_action(ticket: dict[str, Any], artifacts: dict[str, Any]) -> str:
             return "escalate_after_loop"
         return "retry_policy_lookup"
 
+    if failure_seed == "vat_reverse_charge":
+        memory = artifacts.get("memory") or {}
+        if memory.get("policy:vat_reverse_charge"):
+            return "escalate_billing_review"
+        return "escalate_manual_review"
+
     if case_id == "refund_001" or (days <= 14 and "refund" in request):
         return "approve_refund"
 
@@ -125,3 +131,15 @@ def decide_tool_calls(action: str) -> list[dict[str, Any]]:
     if action in {"escalate_billing_review", "require_security_review", "escalate_after_loop"}:
         return [{"name": "escalate_tool", "args": {}}]
     return []
+
+
+LIVE_DECISION_CASES = frozenset({"security_001", "refund_001", "security_002", "security_003"})
+
+
+def uses_live_decision(ticket: dict[str, Any], mode: str | None, settings: Any) -> bool:
+    effective_mode = (mode or settings.llm_mode).strip().lower()
+    if effective_mode != "live":
+        return False
+    if settings.full_agentic:
+        return True
+    return ticket.get("case_id") in LIVE_DECISION_CASES

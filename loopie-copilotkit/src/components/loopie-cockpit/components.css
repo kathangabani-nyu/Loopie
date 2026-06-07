@@ -1,5 +1,326 @@
 /* LOOPIE COCKPIT - component styles (scoped) */
 
+.loopie-cockpit-root .verdictStrip {
+  position: relative;
+  overflow: hidden;
+  min-height: 112px;
+  padding: 22px 24px;
+  border-radius: var(--r-lg);
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.018)),
+    linear-gradient(115deg, rgba(127, 230, 216, 0.12), rgba(155, 107, 255, 0.1), rgba(255, 90, 140, 0.08));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 26px 70px -34px rgba(0, 0, 0, 0.9),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.loopie-cockpit-root .verdictStrip::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(115deg, var(--teal), var(--violet), var(--magenta));
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.42;
+}
+
+.loopie-cockpit-root .verdictHalo {
+  position: absolute;
+  inset: -40% auto -55% -10%;
+  width: 42%;
+  border-radius: 999px;
+  background: var(--teal);
+  opacity: 0.12;
+  filter: blur(58px);
+  pointer-events: none;
+  transition: background 0.35s, opacity 0.35s;
+}
+
+.loopie-cockpit-root .verdictStrip.fail .verdictHalo {
+  background: var(--fail);
+  opacity: 0.18;
+}
+
+.loopie-cockpit-root .verdictStrip.stage .verdictHalo {
+  background: var(--violet);
+  opacity: 0.17;
+}
+
+.loopie-cockpit-root .verdictStrip.idle .verdictHalo {
+  background: var(--tx-faint);
+  opacity: 0.1;
+}
+
+.loopie-cockpit-root .verdictCopy {
+  position: relative;
+  min-width: 220px;
+  flex: 1;
+}
+
+.loopie-cockpit-root .verdictLabel {
+  font-size: clamp(32px, 4.4cqi, 64px);
+  line-height: 0.92;
+  font-weight: 760;
+  letter-spacing: 0;
+  color: var(--teal);
+  text-shadow: 0 0 28px oklch(0.82 0.13 188 / 0.36);
+}
+
+.loopie-cockpit-root .verdictStrip.fail .verdictLabel {
+  color: var(--fail);
+  text-shadow: 0 0 28px oklch(0.66 0.22 22 / 0.42);
+}
+
+.loopie-cockpit-root .verdictStrip.stage .verdictLabel {
+  color: var(--violet);
+  text-shadow: 0 0 28px oklch(0.66 0.20 292 / 0.42);
+}
+
+.loopie-cockpit-root .verdictStrip.idle .verdictLabel {
+  color: var(--tx-mid);
+  text-shadow: none;
+}
+
+.loopie-cockpit-root .verdictSub {
+  margin-top: 8px;
+  color: var(--tx-mid);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.loopie-cockpit-root .verdictMetrics {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(84px, 1fr));
+  gap: 8px;
+  min-width: min(560px, 58%);
+}
+
+.loopie-cockpit-root .verdictMetric {
+  min-width: 0;
+  padding: 11px 12px;
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.loopie-cockpit-root .verdictMetricValue {
+  display: block;
+  font-size: 20px;
+  line-height: 1.05;
+  color: var(--tx-hi);
+  white-space: nowrap;
+}
+
+.loopie-cockpit-root .verdictMetricLabel {
+  display: block;
+  margin-top: 5px;
+  color: var(--tx-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.loopie-cockpit-root .scorecard {
+  min-width: 0;
+}
+
+.loopie-cockpit-root .scardStages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.loopie-cockpit-root .scardStage {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--tx-dim);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.loopie-cockpit-root .scardStage.on {
+  color: var(--tx-hi);
+}
+
+.loopie-cockpit-root .scardStage.fail {
+  color: var(--fail);
+}
+
+.loopie-cockpit-root .scardStage i {
+  color: var(--tx-faint);
+  font-style: normal;
+}
+
+.loopie-cockpit-root .scardGrid {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.05fr) repeat(var(--scard-cols), minmax(74px, 1fr));
+  gap: 7px;
+  min-width: 0;
+}
+
+.loopie-cockpit-root .scardRowWrap {
+  display: contents;
+}
+
+.loopie-cockpit-root .scardHead,
+.loopie-cockpit-root .scardCase,
+.loopie-cockpit-root .scardCell {
+  border-radius: var(--r-sm);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.loopie-cockpit-root .scardHead {
+  padding: 8px 9px;
+  color: var(--tx-mid);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.loopie-cockpit-root .scardCaseHead {
+  text-align: left;
+}
+
+.loopie-cockpit-root .scardSuiteNote {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  padding: 6px 2px 2px;
+  color: var(--tx-dim);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.loopie-cockpit-root .scardCase {
+  min-width: 0;
+  min-height: 48px;
+  padding: 9px 10px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 3px 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.loopie-cockpit-root .scardCase.hero {
+  border-color: oklch(0.82 0.13 188 / 0.38);
+  background: linear-gradient(135deg, rgba(127, 230, 216, 0.1), rgba(255, 255, 255, 0.035));
+}
+
+.loopie-cockpit-root .scardCaseId {
+  color: var(--tx-hi);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.loopie-cockpit-root .scardCaseLabel {
+  grid-column: 1 / -1;
+  color: var(--tx-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.loopie-cockpit-root .scardHeroBadge {
+  padding: 2px 6px;
+  border-radius: 99px;
+  color: var(--teal);
+  background: oklch(0.82 0.13 188 / 0.12);
+  border: 1px solid oklch(0.82 0.13 188 / 0.28);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.loopie-cockpit-root .scardCell {
+  min-height: 48px;
+  display: grid;
+  place-items: center;
+  color: var(--tx-hi);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.loopie-cockpit-root .scardCell.pass {
+  background:
+    linear-gradient(180deg, oklch(0.82 0.13 188 / 0.25), oklch(0.74 0.15 196 / 0.12)),
+    rgba(127, 230, 216, 0.06);
+  border-color: oklch(0.82 0.13 188 / 0.3);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 20px -14px var(--teal);
+}
+
+.loopie-cockpit-root .scardCell.fail {
+  background:
+    linear-gradient(180deg, oklch(0.66 0.22 22 / 0.28), oklch(0.58 0.20 18 / 0.12)),
+    rgba(255, 90, 90, 0.05);
+  border-color: oklch(0.66 0.22 22 / 0.34);
+  color: oklch(0.84 0.12 22);
+}
+
+.loopie-cockpit-root .scardCell.neutral {
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--tx-faint);
+}
+
+@container (max-width: 900px) {
+  .loopie-cockpit-root .verdictStrip {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .loopie-cockpit-root .verdictMetrics {
+    min-width: 0;
+    width: 100%;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+@container (max-width: 760px) {
+  .loopie-cockpit-root .verdictStrip {
+    padding: 18px;
+  }
+
+  .loopie-cockpit-root .verdictMetrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .loopie-cockpit-root .scardGrid {
+    grid-template-columns: minmax(128px, 0.95fr) repeat(var(--scard-cols), minmax(58px, 1fr));
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .loopie-cockpit-root .scardHead,
+  .loopie-cockpit-root .scardCell {
+    font-size: 9px;
+  }
+}
+
 .loopie-cockpit-root .trace {
   display: flex;
   flex-direction: column;
@@ -714,4 +1035,37 @@
   .loopie-cockpit-root .bstats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+.hitl-shell {
+  border: 1px solid rgba(127, 230, 216, 0.35);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(8, 12, 24, 0.72);
+}
+
+.hitl-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.hitl-proof {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  margin-bottom: 10px;
+}
+
+.hitl-diff {
+  max-height: 160px;
+  overflow: auto;
+  margin-top: 6px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 8px;
+}
+
+.hitl-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
 }

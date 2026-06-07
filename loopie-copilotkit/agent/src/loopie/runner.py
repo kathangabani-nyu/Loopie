@@ -8,17 +8,15 @@ from typing import Any
 
 from src.loopie.artifacts import artifact_content_hash
 from src.loopie.config import get_settings
-from src.loopie.decide import decide_action, decide_tool_calls
-from src.loopie.llm import DECISION_PROMPT_VERSION, DECISION_SCHEMA_VERSION, LLMGateway
+from src.loopie.decide import LIVE_DECISION_CASES, decide_action, decide_tool_calls
 from src.loopie.observability import ensure_weave, op
 from src.loopie.reliability.budget import BudgetTracker
+from src.loopie.run_context import RunContext, run_ctx
 from src.loopie.stores.ledger import Ledger
 from src.loopie.stores.redis_store import RedisStore
-from src.loopie.tools import execute_tool
+from src.loopie.swarm import SWARM_NODE_ORDER, graph
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
-
-LIVE_DECISION_CASES = frozenset({"security_001", "refund_001", "security_002", "security_003"})
 
 
 def load_tickets(limit: int | None = None) -> list[dict[str, Any]]:
@@ -41,7 +39,11 @@ def tickets_by_id(limit: int | None = None) -> dict[str, dict[str, Any]]:
 
 def _uses_live_decision(ticket: dict[str, Any], mode: str | None, settings: Any) -> bool:
     effective_mode = (mode or settings.llm_mode).strip().lower()
-    return effective_mode == "live" and ticket.get("case_id") in LIVE_DECISION_CASES
+    if effective_mode != "live":
+        return False
+    if settings.full_agentic:
+        return True
+    return ticket.get("case_id") in LIVE_DECISION_CASES
 
 
 @op("run_ticket")
@@ -57,76 +59,41 @@ def _execute_run(
 ) -> dict[str, Any]:
     settings = get_settings()
     budget = budget or BudgetTracker()
-    gateway = LLMGateway(budget=budget, ledger=ledger, eval_scope=eval_scope)
     artifacts = redis.get_live_artifacts()
 
     if ticket.get("failure_seed") == "planner_loop":
         artifacts["transitions"] = settings.max_agent_transitions
     artifacts_hash = artifact_content_hash(artifacts)
 
-    trace: list[dict[str, Any]] = []
-    nodes = ["triage", "memory_lookup", "policy_check", "resolution", "evaluator"]
-    narration: dict[str, str] = {}
-
-    for node in nodes:
-        budget.record_transition()
-        if budget.budget_guard_triggered:
-            break
-        result = gateway.narrate(
-            node=node,
-            fixture_id=ticket["case_id"],
-            artifact_version=artifact_version,
-            ticket=ticket,
-            artifacts=artifacts,
-        )
-        narration[node] = result.text
-        trace.append(
+    ctx = RunContext(
+        redis=redis,
+        ledger=ledger,
+        mode=mode,
+        artifact_version=artifact_version,
+        budget=budget,
+        eval_scope=eval_scope,
+        artifacts=artifacts,
+    )
+    token = run_ctx.set(ctx)
+    try:
+        final_state = graph.invoke(
             {
-                "node": node,
-                "narration": result.text,
-                "mode": result.mode,
-                "from_cache": result.from_cache,
+                "ticket": ticket,
+                "trace": [],
+                "narration": {},
+                "transitions": 0,
             }
         )
+    finally:
+        run_ctx.reset(token)
 
-    decided_by = "oracle"
-    fallback_used = False
-    decision_schema_version = DECISION_SCHEMA_VERSION
-    prompt_version = DECISION_PROMPT_VERSION
-    cache_hit = False
-
-    if _uses_live_decision(ticket, mode, settings):
-        decision = gateway.decide(
-            ticket,
-            artifacts,
-            fixture_id=ticket["case_id"],
-            artifact_version=artifact_version,
-        )
-        action = decision.action
-        decided_by = decision.decided_by
-        fallback_used = decision.fallback_used
-        decision_schema_version = decision.decision_schema_version
-        prompt_version = decision.prompt_version
-        cache_hit = decision.from_cache
-        trace.append(
-            {
-                "node": "decision",
-                "action": action,
-                "decided_by": decided_by,
-                "fallback_used": fallback_used,
-                "artifact_basis": decision.artifact_basis,
-                "reason": decision.reason,
-                "from_cache": cache_hit,
-            }
-        )
-    else:
-        action = decide_action(ticket, artifacts)
-
-    tool_calls = decide_tool_calls(action)
-    for call in tool_calls:
-        execute_tool(call["name"], {"ticket": ticket, "action": action})
-
+    action = final_state.get("action") or decide_action(ticket, artifacts)
+    tool_calls = final_state.get("tool_calls") or decide_tool_calls(action)
+    oracle_action = decide_action(ticket, artifacts)
     memory = redis.get_memory("policy:refund_window") or {"version": 1}
+    trace = list(final_state.get("trace", []))
+    swarm_nodes = [entry["node"] for entry in trace if entry.get("node") in SWARM_NODE_ORDER]
+
     run = {
         "run_id": str(uuid.uuid4()),
         "case_id": ticket["case_id"],
@@ -134,18 +101,23 @@ def _execute_run(
         "tool_calls": tool_calls,
         "transitions": budget.transitions,
         "max_transitions": int(artifacts.get("max_transitions", 6)),
-        "policy_checked": bool(ticket.get("must_check_policy_version")),
-        "memory_version": int(memory.get("version", 1)),
-        "narration": narration,
+        "policy_checked": bool(final_state.get("policy_checked", ticket.get("must_check_policy_version"))),
+        "memory_version": int(final_state.get("memory_version", memory.get("version", 1))),
+        "narration": final_state.get("narration", {}),
         "trace": trace,
+        "swarm_nodes": swarm_nodes,
+        "execution_engine": final_state.get("execution_engine", "langgraph_swarm"),
         "mode": mode or settings.llm_mode,
-        "decided_by": decided_by,
-        "fallback_used": fallback_used,
-        "decision_schema_version": decision_schema_version,
-        "prompt_version": prompt_version,
-        "cache_hit": cache_hit,
+        "decided_by": final_state.get("decided_by", "oracle"),
+        "fallback_used": bool(final_state.get("fallback_used", False)),
+        "decision_schema_version": final_state.get("decision_schema_version"),
+        "prompt_version": final_state.get("prompt_version"),
+        "cache_hit": bool(final_state.get("cache_hit", False)),
         "artifact_hash": artifacts_hash,
+        "oracle_action": oracle_action,
+        "artifacts_snapshot": artifacts,
         "budget": budget.to_dict(),
+        "budget_guard_triggered": bool(final_state.get("budget_guard_triggered", False)),
     }
     redis.xadd("swarm", {"event": "run_completed", "case_id": ticket["case_id"], "action": action})
     return run

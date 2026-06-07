@@ -3,12 +3,15 @@
 from src.loopie.adapter import supervise_external_run
 from src.loopie.pipeline import LoopiePipeline
 
+from memory_stores import MemoryLedger, MemoryRedis
+
 
 def test_supervise_external_run_matches_oracle():
-    # Reset to a clean baseline so the live Redis substrate has no security guard;
-    # otherwise leftover artifacts from prior demo runs make this non-deterministic.
-    pipeline = LoopiePipeline()
-    pipeline.reset()
+    pipeline = object.__new__(LoopiePipeline)
+    pipeline.redis = MemoryRedis()
+    pipeline.ledger = MemoryLedger()
+    pipeline.state = LoopiePipeline._initial_state()
+    pipeline.seed()
 
     # In the un-patched baseline the oracle (wrongly) allows the refund — that is the
     # very failure Loopie later corrects.

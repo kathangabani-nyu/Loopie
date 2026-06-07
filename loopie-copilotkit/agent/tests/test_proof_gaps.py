@@ -149,6 +149,7 @@ def test_weave_eval_error_is_surfaced_not_silent(monkeypatch):
     assert result["results"] == []
 
 
+@pytest.mark.integration
 def test_run_suite_live_fails_when_whitelist_case_used_fallback(monkeypatch):
     from src.loopie.decide import decide_action
     from src.loopie.llm import LLMDecisionResult, LLMGateway, LLMResult

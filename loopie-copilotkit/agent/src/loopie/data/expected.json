@@ -13,5 +13,10 @@
     "baseline_should_fail": true,
     "patched_should_pass": true,
     "primary_scorers": ["action_match", "loop_count_under_limit"]
+  },
+  "curveball_001": {
+    "baseline_should_fail": true,
+    "patched_should_pass": true,
+    "primary_scorers": ["action_match", "live_decision_honest", "oracle_match"]
   }
 }

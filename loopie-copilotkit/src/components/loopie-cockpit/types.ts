@@ -38,6 +38,14 @@ export type LoopieState = {
     proposal?: Record<string, unknown>;
   }>;
   artifactHistory?: Array<Record<string, unknown>>;
+  artifactProof?: {
+    correction_id?: string;
+    before_hash?: string | null;
+    after_hash?: string;
+    diff?: Array<Record<string, unknown>>;
+    artifact_key?: string;
+    version?: number;
+  } | null;
   evalDelta?: {
     case_id?: string;
     baseline_passed?: Record<string, boolean>;
@@ -52,6 +60,18 @@ export type LoopieState = {
   events?: Array<Record<string, unknown>>;
   budget?: Record<string, unknown>;
   approvalState?: string;
+  preflight?: {
+    ok?: boolean;
+    hosted?: boolean;
+    redis_reachable?: boolean;
+    redis_json?: boolean;
+    postgres_reachable?: boolean;
+    persistence_mode?: string;
+    weave_enabled?: boolean;
+    provider_mode?: string;
+    llm_mode?: string;
+    full_agentic?: boolean;
+  };
 };
 
 export type StreamEvent = {
@@ -82,6 +102,8 @@ export type CorrectionView = {
   diff: DiffLine[];
   blast: Array<{ node: string; impact: "direct" | "indirect" | "none"; note?: string }>;
   approved: boolean;
+  beforeHash?: string;
+  afterHash?: string;
 };
 
 export type FailureView = {

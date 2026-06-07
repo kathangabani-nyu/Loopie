@@ -7,18 +7,28 @@ from typing import Any
 
 from src.loopie.config import get_settings
 from src.loopie.reliability.classifier import classify_failure
-from src.loopie.reliability.corrections import apply, propose
+from src.loopie.reliability.corrections import apply
+from src.loopie.reliability.diagnosis import agentic_diagnosis
+from src.loopie.reliability.scorers import live_decision_honest, oracle_match
 from src.loopie.reliability.replay import counterfactual_replay
 from src.loopie.reliability.scorers import run_passed, score_run
 from src.loopie.runner import LIVE_DECISION_CASES, load_tickets, run_ticket, seed_baseline, tickets_by_id
+from src.loopie.preflight import run_preflight
 from src.loopie.stores.ledger import Ledger
 from src.loopie.stores.redis_store import RedisStore
 
 
 class LoopiePipeline:
     def __init__(self) -> None:
+        settings = get_settings()
         self.redis = RedisStore()
-        self.ledger = Ledger.connect()
+        self.ledger = Ledger.connect(strict=settings.hosted)
+        if settings.hosted:
+            from src.loopie.preflight import assert_hosted_ready
+
+            self.preflight = assert_hosted_ready(redis=self.redis, ledger=self.ledger)
+        else:
+            self.preflight = run_preflight(redis=self.redis, ledger=self.ledger)
         self.state: dict[str, Any] = self._initial_state()
 
     def _llm_mode(self) -> str:
@@ -34,6 +44,7 @@ class LoopiePipeline:
             "currentFailure": None,
             "proposedCorrections": [],
             "artifactHistory": [],
+            "artifactProof": None,
             "evalDelta": {},
             "counterfactual": {},
             "events": [],
@@ -74,7 +85,7 @@ class LoopiePipeline:
         failure = self.state.get("currentFailure")
         if not failure:
             return {"error": "no_current_failure"}
-        correction = propose(failure["category"], case_id=failure["case_id"])
+        correction = agentic_diagnosis(failure)
         self.state["proposedCorrections"] = [correction]
         self.state["approvalState"] = "pending"
         return correction
@@ -89,6 +100,14 @@ class LoopiePipeline:
         result = apply(correction, redis=self.redis, ledger=self.ledger)
         self.state["approvalState"] = "approved"
         self.state["artifactHistory"] = self.ledger.artifact_history(result["artifact_key"])
+        self.state["artifactProof"] = {
+            "correction_id": result.get("correction_id"),
+            "before_hash": result.get("before_hash"),
+            "after_hash": result.get("after_hash"),
+            "diff": result.get("diff", []),
+            "artifact_key": result.get("artifact_key"),
+            "version": result.get("version"),
+        }
         self.ledger.record_audit("approval", {"correction_id": correction_id, "result": result})
         return result
 
@@ -113,7 +132,15 @@ class LoopiePipeline:
             "improved": passed and baseline and not run_passed(baseline["scores"]),
         }
         self.redis.xadd("evals", {"event": "patched_complete", "case_id": case_id, "passed": passed})
-        return {"eval_run_id": eval_run_id, "passed": passed, "scores": scores, "evalDelta": self.state["evalDelta"], "run": run}
+        artifact_proof = self.state.get("artifactProof")
+        return {
+            "eval_run_id": eval_run_id,
+            "passed": passed,
+            "scores": scores,
+            "evalDelta": self.state["evalDelta"],
+            "run": run,
+            "artifact_proof": artifact_proof,
+        }
 
     def counterfactual_replay_suite(self, *, hero_case_id: str = "security_001") -> dict[str, Any]:
         ticket = tickets_by_id()[hero_case_id]
@@ -140,9 +167,33 @@ class LoopiePipeline:
             if not run:
                 continue
             case_id = run.get("case_id")
-            if case_id in LIVE_DECISION_CASES and run.get("fallback_used"):
+            if run.get("fallback_used"):
                 fallback_cases.append(case_id)
         return fallback_cases
+
+    @staticmethod
+    def _collect_dishonest_live_cases(*runs: dict[str, Any] | None, tickets: dict[str, dict[str, Any]]) -> list[str]:
+        dishonest: list[str] = []
+        for run in runs:
+            if not run:
+                continue
+            case_id = run.get("case_id", "")
+            ticket = tickets.get(case_id, {"case_id": case_id})
+            if not live_decision_honest(run, ticket):
+                dishonest.append(case_id)
+        return dishonest
+
+    @staticmethod
+    def _collect_oracle_mismatch_cases(*runs: dict[str, Any] | None, tickets: dict[str, dict[str, Any]]) -> list[str]:
+        mismatches: list[str] = []
+        for run in runs:
+            if not run:
+                continue
+            case_id = run.get("case_id", "")
+            ticket = tickets.get(case_id, {"case_id": case_id})
+            if run.get("decided_by") == "llm" and not oracle_match(run, ticket):
+                mismatches.append(case_id)
+        return mismatches
 
     def get_artifact_history(self, key: str) -> list[dict[str, Any]]:
         return self.ledger.artifact_history(key)
@@ -151,6 +202,7 @@ class LoopiePipeline:
         return {
             "ledger_total_cost": self.ledger.total_cost(),
             "mock_total_cost": self.ledger.total_cost(mode="mock"),
+            "cost_by_provider": self.ledger.cost_by_provider(),
             "pipeline_budget": self.state.get("budget", {}),
         }
 
@@ -195,6 +247,7 @@ class LoopiePipeline:
                 redis=self.redis,
                 ledger=self.ledger,
                 correction_id=proposal.get("id"),
+                artifact_proof=self.state.get("artifactProof"),
                 mode=mode,
             )
 
@@ -211,6 +264,23 @@ class LoopiePipeline:
             if result.get("case_id") in LIVE_DECISION_CASES and result.get("fallback_used")
         ]
         live_fallback_cases = sorted(set(live_fallback_cases + eval_fallback_cases))
+        ticket_map = tickets_by_id()
+        run_dicts = [
+            baseline.get("failure", {}).get("run"),
+            patched.get("run"),
+            *counterfactual_runs,
+        ]
+        eval_rows = [
+            row
+            for suite in (eval_baseline, eval_patched)
+            for row in (suite or {}).get("results", [])
+        ]
+        dishonest_cases = sorted(
+            set(self._collect_dishonest_live_cases(*run_dicts, *eval_rows, tickets=ticket_map))
+        )
+        oracle_mismatch_cases = sorted(
+            set(self._collect_oracle_mismatch_cases(*run_dicts, tickets=ticket_map))
+        )
 
         weave_errors = [
             err
@@ -226,7 +296,13 @@ class LoopiePipeline:
         )
 
         core_ok = patched["passed"] and counterfactual["no_regression"]
-        live_honest = len(live_fallback_cases) == 0 and len(weave_errors) == 0 and not weave_manual_fallback
+        live_honest = (
+            len(live_fallback_cases) == 0
+            and len(dishonest_cases) == 0
+            and len(oracle_mismatch_cases) == 0
+            and len(weave_errors) == 0
+            and not weave_manual_fallback
+        )
         ok = core_ok and (live_honest if mode == "live" else True)
 
         return {
@@ -239,6 +315,8 @@ class LoopiePipeline:
             "eval_baseline": eval_baseline,
             "eval_patched": eval_patched,
             "live_fallback_cases": live_fallback_cases,
+            "dishonest_live_cases": dishonest_cases,
+            "oracle_mismatch_cases": oracle_mismatch_cases,
             "weave_eval_errors": weave_errors,
             "weave_eval_used_manual_fallback": weave_manual_fallback,
             "budget": self.get_budget_status(),
@@ -252,4 +330,5 @@ class LoopiePipeline:
             + self.redis.xread_recent("swarm")
             + self.redis.xread_recent("corrections")
         )
+        self.state["preflight"] = run_preflight(redis=self.redis, ledger=self.ledger)
         return self.state

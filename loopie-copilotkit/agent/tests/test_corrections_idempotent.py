@@ -4,6 +4,7 @@ import pytest
 
 from src.loopie.config import get_settings
 from src.loopie.pipeline import LoopiePipeline
+from memory_stores import MemoryLedger, MemoryRedis
 
 
 @pytest.fixture(autouse=True)
@@ -14,14 +15,22 @@ def mock_mode(monkeypatch):
     get_settings.cache_clear()
 
 
+@pytest.fixture
+def pipeline() -> LoopiePipeline:
+    p = object.__new__(LoopiePipeline)
+    p.redis = MemoryRedis()
+    p.ledger = MemoryLedger()
+    p.state = LoopiePipeline._initial_state()
+    return p
+
+
 def _approve_hero(pipeline: LoopiePipeline):
     pipeline.run_baseline(case_id="security_001")
     proposal = pipeline.propose_corrections()
     return proposal, pipeline.approve_correction(proposal["id"])
 
 
-def test_reapproving_same_correction_is_a_noop():
-    pipeline = LoopiePipeline()
+def test_reapproving_same_correction_is_a_noop(pipeline: LoopiePipeline):
     pipeline.reset()
 
     proposal, first = _approve_hero(pipeline)
@@ -38,8 +47,7 @@ def test_reapproving_same_correction_is_a_noop():
     assert len(history_after_second) == len(history_after_first)
 
 
-def test_reset_returns_to_single_baseline_version():
-    pipeline = LoopiePipeline()
+def test_reset_returns_to_single_baseline_version(pipeline: LoopiePipeline):
     pipeline.reset()
     _approve_hero(pipeline)
     assert len(pipeline.get_artifact_history("routing:rules")) == 2  # v1 seed + v2 guard
@@ -50,8 +58,7 @@ def test_reset_returns_to_single_baseline_version():
     assert history[0]["version"] == 1
 
 
-def test_narration_is_case_specific():
-    pipeline = LoopiePipeline()
+def test_narration_is_case_specific(pipeline: LoopiePipeline):
     pipeline.reset()
 
     baseline = pipeline.run_baseline(case_id="security_001")
@@ -66,3 +73,37 @@ def test_narration_is_case_specific():
     # Patched run: the guard is now active.
     patched_run = next(r for r in pipeline.state["runs"].values() if r["label"] == "patched")
     assert "ACTIVE" in patched_run["run"]["narration"]["policy_check"]
+
+
+def test_approve_surfaces_artifact_proof_payload(pipeline: LoopiePipeline):
+    pipeline.reset()
+    proposal, approved = _approve_hero(pipeline)
+
+    assert approved["correction_id"] == proposal["id"]
+    assert approved["before_hash"]
+    assert approved["after_hash"]
+    assert approved["before_hash"] != approved["after_hash"]
+    assert isinstance(approved["diff"], list)
+    assert len(approved["diff"]) > 0
+
+    patched = pipeline.run_patched(case_id="security_001")
+    proof = patched.get("artifact_proof")
+    assert proof is not None
+    assert proof["correction_id"] == proposal["id"]
+    assert proof["before_hash"] == approved["before_hash"]
+    assert proof["after_hash"] == approved["after_hash"]
+
+    from src.loopie.reliability.evals import evaluate_suite
+
+    eval_result = evaluate_suite(
+        label="patched",
+        redis=pipeline.redis,
+        ledger=pipeline.ledger,
+        correction_id=proposal["id"],
+        artifact_proof=proof,
+        limit=3,
+    )
+    columns = eval_result["proof_columns"]
+    assert columns["before_hash"] == proof["before_hash"]
+    assert columns["after_hash"] == proof["after_hash"]
+    assert columns["diff"] == proof["diff"]

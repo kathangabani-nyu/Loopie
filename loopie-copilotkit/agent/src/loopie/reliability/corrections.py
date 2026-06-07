@@ -6,6 +6,7 @@ import json
 import uuid
 from typing import Any
 
+from src.loopie.artifacts import build_artifact_proof
 from src.loopie.observability import op
 from src.loopie.stores.ledger import Ledger
 from src.loopie.stores.redis_store import RedisStore
@@ -26,6 +27,12 @@ STALE_MEMORY_FIX = {
 PLANNER_LOOP_FIX = {
     "key": "max_transitions",
     "value": 4,
+}
+
+VAT_RECLASSIFICATION_FIX = {
+    "key": "policy:vat_reverse_charge",
+    "value": "EU VAT reverse-charge invoices require escalate_billing_review before any payout.",
+    "version": 2,
 }
 
 
@@ -56,6 +63,15 @@ def propose(failure_category: str, *, case_id: str) -> dict[str, Any]:
             "category": failure_category,
             "proposal": PLANNER_LOOP_FIX,
             "summary": "Tighten max transitions to stop planner-policy loop.",
+        }
+    if failure_category == "vat_reclassification":
+        return {
+            "id": f"corr_{uuid.uuid4().hex[:8]}",
+            "type": "memory_update",
+            "case_id": case_id,
+            "category": failure_category,
+            "proposal": VAT_RECLASSIFICATION_FIX,
+            "summary": "Add VAT reverse-charge policy memory routing to billing review.",
         }
     return {
         "id": f"corr_{uuid.uuid4().hex[:8]}",
@@ -101,13 +117,21 @@ def _commit_artifact(
     history = ledger.artifact_history(artifact_key)
     latest = _latest_version(history)
 
-    if latest is not None and _value_of(latest) == new_value:
+    before_value = _value_of(latest) if latest is not None else None
+    proof = build_artifact_proof(
+        correction_id=correction.get("id"),
+        before_value=before_value,
+        after_value=new_value,
+    )
+
+    if latest is not None and before_value == new_value:
         redis.xadd("corrections", {"event": "correction_noop", "correction": correction})
         return {
             "artifact_key": artifact_key,
             "version": latest["version"],
             "correction_id": correction.get("id"),
             "no_op": True,
+            **proof,
         }
 
     version = (latest["version"] if latest else 0) + 1
@@ -118,12 +142,22 @@ def _commit_artifact(
         source_case=correction.get("case_id"),
         correction_id=correction.get("id"),
     )
-    redis.xadd("corrections", {"event": event, "correction": correction})
+    redis.set_artifact_doc(
+        artifact_key,
+        {
+            "artifact_key": artifact_key,
+            "version": version,
+            "value": new_value,
+            "correction_id": correction.get("id"),
+            "proof": proof,
+        },
+    )
+    redis.xadd("corrections", {"event": event, "correction": correction, "artifact_proof": proof})
     return {
         "artifact_key": artifact_key,
         "version": version,
-        "correction_id": correction.get("id"),
         "no_op": False,
+        **proof,
     }
 
 

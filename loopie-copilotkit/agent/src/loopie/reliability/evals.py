@@ -105,6 +105,89 @@ def _run_manual_suite(
     return eval_budget
 
 
+def _value_of_artifact_row(row: dict[str, Any]) -> Any:
+    import json
+
+    value = row.get("value")
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _artifact_proof_bundle(
+    ledger: Ledger,
+    correction_id: str | None,
+    *,
+    artifact_proof: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Reuse approval-time proof when available; otherwise derive from ledger history."""
+    from src.loopie.artifacts import artifact_value_hash, build_artifact_proof
+
+    if artifact_proof and artifact_proof.get("after_hash"):
+        return {
+            "correction_id": artifact_proof.get("correction_id") or correction_id,
+            "before_hash": artifact_proof.get("before_hash"),
+            "after_hash": artifact_proof.get("after_hash"),
+            "diff": artifact_proof.get("diff", []),
+        }
+
+    if not correction_id:
+        return {
+            "correction_id": None,
+            "before_hash": None,
+            "after_hash": None,
+            "diff": [],
+        }
+
+    target_row: dict[str, Any] | None = None
+    if hasattr(ledger, "_memory_rows"):
+        matches = [r for r in ledger._memory_rows if r.get("correction_id") == correction_id]
+        if matches:
+            target_row = max(matches, key=lambda r: r["version"])
+    if target_row is None:
+        try:
+            with ledger._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT artifact_key, version, value, correction_id
+                    FROM loopie.artifact_versions
+                    WHERE correction_id = %s
+                    ORDER BY version DESC
+                    LIMIT 1
+                    """,
+                    (correction_id,),
+                ).fetchone()
+                if row:
+                    target_row = dict(row)
+        except Exception:
+            pass
+
+    if target_row is None:
+        return {
+            "correction_id": correction_id,
+            "before_hash": None,
+            "after_hash": None,
+            "diff": [],
+        }
+
+    artifact_key = target_row["artifact_key"]
+    history = ledger.artifact_history(artifact_key)
+    after_value = _value_of_artifact_row(target_row)
+    before_row = next(
+        (row for row in reversed(history) if row["version"] < target_row["version"]),
+        None,
+    )
+    before_value = _value_of_artifact_row(before_row) if before_row else None
+    return build_artifact_proof(
+        correction_id=correction_id,
+        before_value=before_value,
+        after_value=after_value,
+    )
+
+
 def evaluate_suite(
     *,
     label: str,
@@ -112,6 +195,7 @@ def evaluate_suite(
     ledger: Ledger | None = None,
     limit: int | None = None,
     correction_id: str | None = None,
+    artifact_proof: dict[str, Any] | None = None,
     mode: str | None = None,
 ) -> dict[str, Any]:
     ensure_weave()
@@ -157,6 +241,8 @@ def evaluate_suite(
                     "action": run["action"],
                     "decided_by": run.get("decided_by"),
                     "fallback_used": run.get("fallback_used", False),
+                    "oracle_action": run.get("oracle_action"),
+                    "cache_hit": run.get("cache_hit", False),
                 }
             )
 
@@ -179,9 +265,19 @@ def evaluate_suite(
             "iteration": label,
             "artifact_version": artifact_version,
             "case_family": "suite",
+            "display_name": f"loopie_{label}_{artifact_version}",
+            "compare_group": "loopie_suite",
         }
         if correction_id:
             attrs["correction_id"] = correction_id
+        proof_bundle = _artifact_proof_bundle(ledger, correction_id, artifact_proof=artifact_proof)
+        attrs.update(
+            {
+                "proof_correction_id": proof_bundle.get("correction_id"),
+                "proof_before_hash": proof_bundle.get("before_hash"),
+                "proof_after_hash": proof_bundle.get("after_hash"),
+            }
+        )
 
         evaluation = weave.Evaluation(
             name=f"loopie_{label}",
@@ -220,6 +316,24 @@ def evaluate_suite(
         _collect_results()
 
     passed_count = sum(1 for r in results if r["passed"])
+    fallback_count = sum(1 for r in results if r.get("fallback_used"))
+    proof_bundle = _artifact_proof_bundle(ledger, correction_id, artifact_proof=artifact_proof)
+    proof_columns = {
+        "correction_id": proof_bundle.get("correction_id") or correction_id,
+        "before_hash": proof_bundle.get("before_hash"),
+        "after_hash": proof_bundle.get("after_hash"),
+        "diff": proof_bundle.get("diff", []),
+        "fallback_count": fallback_count,
+        "no_regression": passed_count == len(results) if label == "patched" else None,
+    }
+
+    weave_project_url = None
+    if weave_eval_id and os.getenv("WANDB_API_KEY"):
+        entity = os.getenv("WANDB_ENTITY", "")
+        project = get_settings().weave_project
+        base = f"https://wandb.ai/{entity}/{project}" if entity else f"https://wandb.ai/{project}"
+        weave_project_url = f"{base}/weave/evaluations/{weave_eval_id}"
+
     return {
         "label": label,
         "total": len(results),
@@ -230,5 +344,7 @@ def evaluate_suite(
         "weave_eval_id": weave_eval_id,
         "weave_eval_error": weave_eval_error,
         "weave_eval_used_manual_fallback": weave_eval_used_manual_fallback,
+        "weave_project_url": weave_project_url,
+        "proof_columns": proof_columns,
         "artifacts_rewound": label == "baseline",
     }

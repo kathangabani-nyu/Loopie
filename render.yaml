@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: loopie-api
+    runtime: python
+    rootDir: loopie-copilotkit/agent
+    plan: free
+    buildCommand: pip install uv && uv sync --frozen
+    startCommand: uv run uvicorn loopie_server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: LOOPIE_HOSTED
+        value: "1"
+      - key: LOOPIE_LLM_MODE
+        value: mock
+      - key: LOOPIE_FULL_AGENTIC
+        value: "false"
+      - key: LOOPIE_PERSISTENCE_MODE
+        value: hosted
+      - key: WEAVE_PROJECT
+        value: loopie
+      - key: REDIS_URL
+        sync: false
+      - key: POSTGRES_URL
+        sync: false
+      - key: WANDB_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false

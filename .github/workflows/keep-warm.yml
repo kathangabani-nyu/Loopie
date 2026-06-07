@@ -1,0 +1,26 @@
+name: keep-warm
+
+# Pings the Render free-tier backend so it doesn't spin down during a demo/judging window.
+# Render free instances sleep after ~15 min idle (~50s cold start). This beats that.
+# GitHub-hosted cron is best-effort (can be delayed several minutes) and is auto-disabled
+# after 60 days of repo inactivity — for a live judged demo, ALSO set up UptimeRobot/cron-job.org.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *" # every 10 minutes
+  workflow_dispatch: {} # allow manual "warm now" before recording
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health
+        env:
+          RENDER_URL: ${{ vars.RENDER_URL }}
+        run: |
+          if [ -z "$RENDER_URL" ]; then
+            echo "Set repo variable RENDER_URL (Settings → Secrets and variables → Actions → Variables) to your Render URL, e.g. https://loopie-api.onrender.com"
+            exit 1
+          fi
+          echo "Pinging $RENDER_URL/health"
+          curl -fsS --max-time 90 "$RENDER_URL/health" && echo "" && echo "warm OK"

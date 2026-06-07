@@ -4,6 +4,8 @@ import os
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 from src.loopie.config import get_settings
 
 
@@ -17,67 +19,38 @@ def mock_mode(monkeypatch):
 
 def test_run_suite_mock_zero_cost(monkeypatch):
     from src.loopie.pipeline import LoopiePipeline
-    from src.loopie.stores.ledger import Ledger
-    from src.loopie.stores.redis_store import RedisStore
+    from src.loopie.swarm import SWARM_NODE_ORDER
 
-    class MemoryRedis(RedisStore):
-        def __init__(self):
-            self._data: dict[str, str] = {}
-            self._streams: dict[str, list] = {}
+    from memory_stores import MemoryLedger, MemoryRedis
 
-        def ping(self):
-            return True
-
-        def set_memory(self, key, value, version=1):
-            import json
-            self._data[f"memory:{key}"] = json.dumps({"value": value, "version": version})
-
-        def get_memory(self, key):
-            import json
-            raw = self._data.get(f"memory:{key}")
-            return json.loads(raw) if raw else None
-
-        def set_routing_rules(self, rules):
-            import json
-            self._data["routing:rules"] = json.dumps(rules)
-
-        def get_routing_rules(self):
-            import json
-            raw = self._data.get("routing:rules")
-            return json.loads(raw) if raw else []
-
-        def set_config(self, key, value):
-            self._data[f"config:{key}"] = str(value)
-
-        def get_config(self, key, default=None):
-            return self._data.get(f"config:{key}", default)
-
-        def xadd(self, stream, fields):
-            self._streams.setdefault(stream, []).append(fields)
-            return "1-0"
-
-        def xread_recent(self, stream, count=50):
-            return self._streams.get(stream, [])[-count:]
-
-        def flush_loopie_keys(self):
-            self._data.clear()
-            self._streams.clear()
-
-    class MemoryLedger(Ledger):
-        def __init__(self):
-            super().__init__(url="postgresql://invalid", _memory_rows=[], _memory_costs=[])
-
-        def ensure_schema(self):
-            return None
-
-    pipeline = LoopiePipeline()
+    pipeline = object.__new__(LoopiePipeline)
     pipeline.redis = MemoryRedis()
     pipeline.ledger = MemoryLedger()
+    pipeline.preflight = {"ok": True, "provider_mode": "mock", "llm_mode": "mock"}
+    pipeline.state = LoopiePipeline._initial_state()
     result = pipeline.run_suite(mode="mock")
     assert result["ok"] is True
     assert result["patched"]["passed"] is True
     assert result["counterfactual"]["no_regression"] is True
     assert pipeline.ledger.total_cost(mode="mock") == 0.0
+
+    baseline_run = result["baseline"]["failure"]["run"]
+    assert baseline_run["execution_engine"] == "langgraph_swarm"
+    assert baseline_run["swarm_nodes"] == list(SWARM_NODE_ORDER)
+    assert result["patched"]["run"]["execution_engine"] == "langgraph_swarm"
+    assert pipeline.export_state()["preflight"]["provider_mode"] == "mock"
+
+
+def test_hosted_mode_rejects_non_durable_stores(monkeypatch):
+    """Hosted contract: memory ledger fallback is not audit-grade."""
+    from src.loopie.preflight import assert_hosted_ready
+
+    from memory_stores import MemoryLedger, MemoryRedis
+
+    monkeypatch.setenv("LOOPIE_HOSTED", "1")
+    get_settings.cache_clear()
+    with pytest.raises(RuntimeError, match="Hosted Loopie preflight failed"):
+        assert_hosted_ready(redis=MemoryRedis(), ledger=MemoryLedger())
 
 
 def test_mock_run_records_oracle_decision(monkeypatch):
@@ -85,59 +58,13 @@ def test_mock_run_records_oracle_decision(monkeypatch):
     from src.loopie.decide import decide_action
     from src.loopie.pipeline import LoopiePipeline
     from src.loopie.runner import run_ticket, tickets_by_id
-    from src.loopie.stores.redis_store import RedisStore
 
-    class MemoryRedis(RedisStore):
-        def __init__(self):
-            self._data = {}
-            self._streams = {}
+    from memory_stores import MemoryLedger, MemoryRedis
 
-        def ping(self):
-            return True
-
-        def set_memory(self, key, value, version=1):
-            import json
-            self._data[f"memory:{key}"] = json.dumps({"value": value, "version": version})
-
-        def get_memory(self, key):
-            import json
-            raw = self._data.get(f"memory:{key}")
-            return json.loads(raw) if raw else None
-
-        def set_routing_rules(self, rules):
-            import json
-            self._data["routing:rules"] = json.dumps(rules)
-
-        def get_routing_rules(self):
-            import json
-            raw = self._data.get("routing:rules")
-            return json.loads(raw) if raw else []
-
-        def set_config(self, key, value):
-            self._data[f"config:{key}"] = str(value)
-
-        def get_config(self, key, default=None):
-            return self._data.get(f"config:{key}", default)
-
-        def xadd(self, stream, fields):
-            return "1-0"
-
-        def xread_recent(self, stream, count=50):
-            return []
-
-        def get_live_artifacts(self):
-            memory_raw = self.get_memory("policy:refund_window")
-            memory = {}
-            if memory_raw:
-                memory["policy:refund_window"] = memory_raw.get("value", "")
-            return {
-                "memory": memory,
-                "routing_rules": self.get_routing_rules(),
-                "max_transitions": int(self.get_config("max_transitions", "6") or "6"),
-            }
-
-    pipeline = LoopiePipeline()
+    pipeline = object.__new__(LoopiePipeline)
     pipeline.redis = MemoryRedis()
+    pipeline.ledger = MemoryLedger()
+    pipeline.state = LoopiePipeline._initial_state()
     pipeline.seed()
     ticket = tickets_by_id()["security_001"]
     artifacts = pipeline.redis.get_live_artifacts()

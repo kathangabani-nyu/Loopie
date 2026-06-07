@@ -7,6 +7,7 @@ from typing import Any
 from copilotkit import CopilotKitMiddleware, StateStreamingMiddleware, StateItem
 from langchain.agents import create_agent
 from langchain.tools import tool
+from langgraph.types import Command
 from typing_extensions import TypedDict
 
 from src.loopie.pipeline import LoopiePipeline
@@ -19,6 +20,7 @@ class LoopieControlState(TypedDict, total=False):
     currentFailure: dict[str, Any] | None
     proposedCorrections: list[dict[str, Any]]
     artifactHistory: list[dict[str, Any]]
+    artifactProof: dict[str, Any] | None
     evalDelta: dict[str, Any]
     counterfactual: dict[str, Any]
     events: list[dict[str, Any]]
@@ -30,60 +32,66 @@ def _sync_state() -> dict[str, Any]:
     return _pipeline.export_state()
 
 
+def _state_items() -> list[StateItem]:
+    keys = (
+        "runs",
+        "currentFailure",
+        "proposedCorrections",
+        "artifactHistory",
+        "artifactProof",
+        "evalDelta",
+        "counterfactual",
+        "events",
+        "budget",
+        "approvalState",
+    )
+    return [StateItem(state_key=key, tool="*", tool_argument=key) for key in keys]
+
+
+def _command_after(result: dict[str, Any]) -> Command:
+    return Command(update={**_sync_state(), "lastToolResult": result})
+
+
 @tool
-def reset_demo() -> dict[str, Any]:
+def reset_demo() -> Command:
     """Wipe Redis + Postgres back to a clean slate and reseed baseline artifacts."""
-    result = _pipeline.reset()
-    _sync_state()
-    return result
+    return _command_after(_pipeline.reset())
 
 
 @tool
-def seed() -> dict[str, Any]:
+def seed() -> Command:
     """Seed Redis and Postgres with baseline flawed artifacts."""
-    result = _pipeline.seed()
-    _sync_state()
-    return result
+    return _command_after(_pipeline.seed())
 
 
 @tool
-def run_baseline(case_id: str = "security_001") -> dict[str, Any]:
+def run_baseline(case_id: str = "security_001") -> Command:
     """Run baseline eval for a case (defaults to security_001 hero)."""
-    result = _pipeline.run_baseline(case_id=case_id)
-    _sync_state()
-    return result
+    return _command_after(_pipeline.run_baseline(case_id=case_id))
 
 
 @tool
-def propose_corrections() -> dict[str, Any]:
+def propose_corrections() -> Command:
     """Propose a structured correction for the current failure."""
-    result = _pipeline.propose_corrections()
-    _sync_state()
-    return result
+    return _command_after(_pipeline.propose_corrections())
 
 
 @tool
-def approve_correction(correction_id: str) -> dict[str, Any]:
+def approve_correction(correction_id: str) -> Command:
     """Approve and apply a proposed correction by id."""
-    result = _pipeline.approve_correction(correction_id)
-    _sync_state()
-    return result
+    return _command_after(_pipeline.approve_correction(correction_id))
 
 
 @tool
-def run_patched(case_id: str = "security_001") -> dict[str, Any]:
+def run_patched(case_id: str = "security_001") -> Command:
     """Rerun the case after correction approval."""
-    result = _pipeline.run_patched(case_id=case_id)
-    _sync_state()
-    return result
+    return _command_after(_pipeline.run_patched(case_id=case_id))
 
 
 @tool
-def counterfactual_replay(hero_case_id: str = "security_001") -> dict[str, Any]:
+def counterfactual_replay(hero_case_id: str = "security_001") -> Command:
     """Replay hero case and neighbors to prove no regression."""
-    result = _pipeline.counterfactual_replay_suite(hero_case_id=hero_case_id)
-    _sync_state()
-    return result
+    return _command_after(_pipeline.counterfactual_replay_suite(hero_case_id=hero_case_id))
 
 
 @tool
@@ -120,9 +128,7 @@ def build_control_agent():
         tools=control_tools,
         middleware=[
             CopilotKitMiddleware(),
-            StateStreamingMiddleware(
-                StateItem(state_key="runs", tool="run_baseline", tool_argument="runs"),
-            ),
+            StateStreamingMiddleware(*_state_items()),
         ],
         state_schema=LoopieControlState,
         system_prompt=(
