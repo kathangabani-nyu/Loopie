@@ -216,9 +216,8 @@ export function buildTraceView(state: LoopieState, phase: Phase): TraceNode[] {
   const run = getRunForTrace(state, phase);
   const scores =
     phase === "patched" || phase === "counterfactual"
-      ? (Object.values(state.runs || {}).find((r) => r.label === "patched")?.scores ??
-        state.currentFailure?.scores)
-      : state.currentFailure?.scores;
+      ? (findLatestRunEntry(state, "patched")?.scores ?? baselineScores(state))
+      : baselineScores(state);
 
   const passed = scores ? Object.values(scores).every(Boolean) : false;
   const rawTrace = run?.trace || [];
@@ -251,9 +250,8 @@ export function buildSwarmView(state: LoopieState, phase: Phase, running: boolea
 
   const scores =
     phase === "patched" || phase === "counterfactual"
-      ? (Object.values(state.runs || {}).find((r) => r.label === "patched")?.scores ??
-        state.currentFailure?.scores)
-      : state.currentFailure?.scores;
+      ? (findLatestRunEntry(state, "patched")?.scores ?? baselineScores(state))
+      : baselineScores(state);
   const passed = scores ? Object.values(scores).every(Boolean) : false;
   const byNode = new Map(
     (run?.trace || [])
@@ -582,7 +580,7 @@ function heroCaseId(state: LoopieState): string {
 }
 
 function baselineScores(state: LoopieState): Record<string, boolean> | undefined {
-  return state.currentFailure?.scores || findRunScores(state, "baseline") || state.evalDelta?.baseline_passed;
+  return state.currentFailure?.scores ?? findRunScores(state, "baseline") ?? state.evalDelta?.baseline_passed;
 }
 
 function patchedScores(state: LoopieState): Record<string, boolean> | undefined {

@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterator, TypeVar
 
+from src.loopie.artifacts import apply_seed_artifacts_to_redis
 from src.loopie.config import get_settings
 from src.loopie.reliability.classifier import classify_failure
 from src.loopie.reliability.corrections import apply
@@ -106,8 +107,22 @@ class LoopiePipeline:
         self.state["events"] = self.redis.xread_recent("evals")
         return result
 
+    def _begin_baseline_leg(self) -> None:
+        """Rewind Redis to seed artifacts and clear downstream demo state."""
+        apply_seed_artifacts_to_redis(self.redis)
+        self.state["currentFailure"] = None
+        self.state["proposedCorrections"] = []
+        self.state["approvalState"] = "idle"
+        self.state["artifactProof"] = None
+        self.state["evalDelta"] = {}
+        self.state["counterfactual"] = {}
+        self.state["runs"] = {}
+        self.state.pop("weaveEvalBaseline", None)
+        self.state.pop("weaveEvalPatched", None)
+
     def run_baseline(self, *, case_id: str = "security_001") -> dict[str, Any]:
         def _do() -> dict[str, Any]:
+            self._begin_baseline_leg()
             ticket = tickets_by_id()[case_id]
             run = run_ticket(ticket, redis=self.redis, ledger=self.ledger, mode=self._llm_mode())
             scores = score_run(run, ticket)
@@ -154,23 +169,28 @@ class LoopiePipeline:
         def _do() -> dict[str, Any]:
             from src.loopie.reliability.evals import evaluate_suite
 
-            result = evaluate_suite(
-                label=label,
-                redis=self.redis,
-                ledger=self.ledger,
-                correction_id=correction_id,
-                artifact_proof=artifact_proof or self.state.get("artifactProof"),
-                mode=self._llm_mode(),
-            )
             state_key = "weaveEvalBaseline" if label == "baseline" else "weaveEvalPatched"
-            self.state[state_key] = result
-            if result.get("weave_eval_error"):
-                raise RuntimeError(f"W&B Weave eval failed for {label}: {result['weave_eval_error']}")
-            if not result.get("weave_project_url"):
-                raise RuntimeError(
-                    f"W&B Weave eval for {label} did not produce a dashboard URL. "
+            try:
+                result = evaluate_suite(
+                    label=label,
+                    redis=self.redis,
+                    ledger=self.ledger,
+                    correction_id=correction_id,
+                    artifact_proof=artifact_proof or self.state.get("artifactProof"),
+                    mode=self._llm_mode(),
+                )
+            except Exception as exc:
+                result = {
+                    "label": label,
+                    "weave_eval_error": f"{type(exc).__name__}: {exc}",
+                    "weave_project_url": None,
+                }
+            if not result.get("weave_eval_error") and not result.get("weave_project_url"):
+                result["weave_eval_error"] = (
+                    "Weave eval did not produce a dashboard URL. "
                     "Set WANDB_ENTITY and confirm the eval is visible in W&B."
                 )
+            self.state[state_key] = result
             return result
 
         return self._timed(f"weave_eval_{label}", _do)
