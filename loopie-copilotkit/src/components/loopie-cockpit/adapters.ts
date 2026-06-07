@@ -1,8 +1,9 @@
-import { CATEGORY_TITLES, HERO_CASE_ID, SCORE_ORDER, SWARM_AGENTS, VERDICT } from "./constants";
+import { CATEGORY_TITLES, HERO_CASE_ID, PHASES, SCORE_ORDER, SWARM_AGENTS, VERDICT } from "./constants";
 import type {
   ArtifactVersion,
   BudgetView,
   CorrectionView,
+  DemoBriefView,
   EvalDeltaView,
   FailureView,
   LoopieState,
@@ -15,6 +16,8 @@ import type {
   TraceNode,
   VerdictView,
 } from "./types";
+
+type RawCorrection = NonNullable<LoopieState["proposedCorrections"]>[number];
 
 function hasBaselineRun(state: LoopieState): boolean {
   return Object.values(state.runs || {}).some((r) => r.label === "baseline");
@@ -59,6 +62,62 @@ function boolScoresToNumeric(scores: Record<string, boolean>): Record<string, nu
     if (!(k in out)) out[k] = v ? 1 : 0;
   }
   return out;
+}
+
+function failedScorers(scores?: Record<string, boolean>): string[] {
+  return Object.entries(scores || {})
+    .filter(([, pass]) => !pass)
+    .map(([name]) => name);
+}
+
+function expectedActionForCategory(category: string | undefined): string | undefined {
+  if (category === "bad_tool_authority" || category === "missing_guard") return "escalate_security";
+  if (category === "stale_memory") return "deny_refund_offer_credit";
+  if (category === "looping_plan") return "escalate_after_loop";
+  if (category === "vat_reclassification") return "escalate_billing_review";
+  return undefined;
+}
+
+function exactErrorForFailure(failure: LoopieState["currentFailure"]): string {
+  if (!failure) return "No failing eval has been run yet.";
+  const category = failure.category || "unknown_failure";
+  const action = failure.run?.action ? ` The swarm chose ${failure.run.action}.` : "";
+  const scores = failedScorers(failure.scores);
+  const scorerText = scores.length ? ` Failed scorer${scores.length > 1 ? "s" : ""}: ${scores.join(", ")}.` : "";
+
+  if (category === "bad_tool_authority" || category === "missing_guard") {
+    return `security_flag was true, but the refund path was still allowed.${action}${scorerText}`;
+  }
+  if (category === "stale_memory") {
+    return `The swarm read an outdated refund-window memory and made the wrong refund decision.${action}${scorerText}`;
+  }
+  if (category === "looping_plan") {
+    return `The planner exceeded the transition budget instead of reaching a stable refund decision.${action}${scorerText}`;
+  }
+  if (category === "vat_reclassification") {
+    return `The refund path missed the VAT reverse-charge billing rule.${action}${scorerText}`;
+  }
+  return `The deterministic eval failed.${action}${scorerText}`;
+}
+
+function correctionDecisionBasis(raw: RawCorrection): string {
+  const category = raw?.category || "unknown_failure";
+  const failing = Array.isArray((raw as { failing_scorers?: unknown }).failing_scorers)
+    ? ((raw as { failing_scorers?: string[] }).failing_scorers || [])
+    : [];
+  const scorerText = failing.length ? ` using ${failing.join(", ")}` : "";
+  const mode = String((raw as { diagnosis_mode?: string }).diagnosis_mode || "deterministic");
+
+  if (raw?.type === "routing_rule") {
+    return `${mode} classifier mapped ${category}${scorerText} to a Redis routing guard.`;
+  }
+  if (raw?.type === "memory_update") {
+    return `${mode} classifier mapped ${category}${scorerText} to a Redis memory update.`;
+  }
+  if (raw?.type === "config_update") {
+    return `${mode} classifier mapped ${category}${scorerText} to a versioned config artifact.`;
+  }
+  return `${mode} classifier mapped ${category}${scorerText} to manual review.`;
 }
 
 function getRunForTrace(state: LoopieState, phase: Phase): RunReceipt | undefined {
@@ -178,7 +237,53 @@ export function buildFailureView(state: LoopieState): FailureView | null {
     title: CATEGORY_TITLES[failure.category || ""] || "Deterministic eval failure",
     input: request,
     scores: boolScoresToNumeric(failure.scores || {}),
+    failedScorers: failedScorers(failure.scores),
+    observedAction: run?.action,
+    expectedAction: expectedActionForCategory(failure.category),
+    exactError: exactErrorForFailure(failure),
   };
+}
+
+function oneLineJson(value: unknown): string {
+  return JSON.stringify(value, null, 0);
+}
+
+function prettyJsonLines(value: unknown, prefix = "  "): string[] {
+  return JSON.stringify(value, null, 2)
+    .split("\n")
+    .map((line) => `${prefix}${line}`);
+}
+
+function formatProofDiff(entries: Array<Record<string, unknown>>): CorrectionView["diff"] {
+  const lines: CorrectionView["diff"] = [];
+  for (const entry of entries) {
+    const path = String(entry.path || ".");
+    lines.push({ t: "ctx", l: path === "." ? "artifact value" : `path: ${path}` });
+
+    if ("before" in entry) {
+      const before = entry.before;
+      if (Array.isArray(before) && before.length === 0) {
+        lines.push({ t: "del", l: "  before: [] (no guard present)" });
+      } else {
+        lines.push({ t: "del", l: `  before: ${oneLineJson(before)}` });
+      }
+    }
+
+    if ("after" in entry) {
+      const after = entry.after;
+      if (Array.isArray(after)) {
+        lines.push({ t: "add", l: "  after:" });
+        after.forEach((item) => lines.push({ t: "add", l: `    ${oneLineJson(item)}` }));
+      } else {
+        lines.push({ t: "add", l: `  after: ${oneLineJson(after)}` });
+      }
+    }
+
+    if (Array.isArray(entry.changes)) {
+      lines.push(...formatProofDiff(entry.changes as Array<Record<string, unknown>>));
+    }
+  }
+  return lines.length ? lines : [{ t: "ctx", l: "No material artifact diff recorded." }];
 }
 
 function buildDiffFromProposal(
@@ -187,9 +292,10 @@ function buildDiffFromProposal(
 ): CorrectionView["diff"] {
   if (type === "routing_rule") {
     return [
-      { t: "ctx", l: "routing_rules: [" },
-      { t: "add", l: `  ${JSON.stringify(proposal, null, 0)}` },
-      { t: "ctx", l: "]" },
+      { t: "ctx", l: "Redis artifact: routing:rules" },
+      { t: "del", l: "  no security_flag_blocks_refund guard" },
+      { t: "add", l: "  add rule:" },
+      ...prettyJsonLines(proposal, "    ").map((l) => ({ t: "add" as const, l })),
     ];
   }
   if (type === "memory_update") {
@@ -252,16 +358,13 @@ export function buildCorrectionView(state: LoopieState): CorrectionView | null {
           : raw.category || "artifact";
 
   const proof = state.artifactProof;
-  const proofDiff =
-    proof?.diff?.map((entry) => ({
-      t: "ctx" as const,
-      l: JSON.stringify(entry),
-    })) || [];
+  const proofDiff = proof?.diff?.length ? formatProofDiff(proof.diff) : [];
 
   return {
     id: raw.id,
     title: raw.summary || "Structured correction proposal",
     rationale: (raw as { diagnosis?: string }).diagnosis || raw.summary || "",
+    decisionBasis: correctionDecisionBasis(raw),
     confidence: type === "manual_review" ? 0.5 : 0.91,
     risk: type === "routing_rule" || type === "memory_update" ? "low" : "medium",
     target,
@@ -508,6 +611,51 @@ export function buildScorecard(state: LoopieState, phase: Phase): ScorecardView 
       phase === "counterfactual" && state.counterfactual
         ? Boolean(state.counterfactual.no_regression)
         : null,
+  };
+}
+
+export function buildDemoBriefView(state: LoopieState, phase: Phase): DemoBriefView {
+  const failure = buildFailureView(state);
+  const correction = buildCorrectionView(state);
+  const improved = Boolean(state.evalDelta?.improved);
+  const approved = state.approvalState === "approved";
+  const hasPatched = hasPatchedRun(state);
+
+  const stepState = (step: Phase): "todo" | "active" | "done" | "blocked" => {
+    const order = PHASES.indexOf(step);
+    const current = PHASES.indexOf(phase);
+    if (step === "baseline" && failure) return phase === "baseline" ? "active" : "done";
+    if (step === "proposal" && correction) return phase === "proposal" ? "active" : "done";
+    if (step === "approved" && approved) return phase === "approved" ? "active" : "done";
+    if (step === "patched" && hasPatched) return improved ? "done" : "blocked";
+    if (order === current) return "active";
+    return order < current ? "done" : "todo";
+  };
+
+  const presenterLine =
+    phase === "idle"
+      ? "Start with one seeded failure: a security-flagged refund ticket should escalate, but the swarm is missing a routing guard."
+      : phase === "baseline" && failure
+        ? failure.exactError
+        : phase === "proposal" && correction
+          ? `${correction.decisionBasis} The proposed change is review-only until approved.`
+          : phase === "approved" && correction
+            ? `Human approval staged ${correction.artifact}; the same eval still needs to rerun before we claim improvement.`
+            : hasPatched && improved
+              ? "The same eval recovered after the approved Redis artifact changed."
+              : "Loopie is replaying neighboring cases to prove the fix did not over-block refunds.";
+
+  return {
+    headline: "Refund Ticket Swarm Reliability Demo",
+    subhead:
+      "Loopie watches a support-ticket swarm fail, shows the trace, stages a Redis correction, waits for human approval, then reruns the same eval.",
+    presenterLine,
+    steps: [
+      { label: "Baseline fails", status: stepState("baseline") },
+      { label: "Trace explains why", status: phase === "baseline" ? "active" : stepState("proposal") },
+      { label: "Redis fix approved", status: stepState("approved") },
+      { label: "Same eval improves", status: stepState("patched") },
+    ],
   };
 }
 

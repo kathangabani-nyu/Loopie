@@ -4,7 +4,7 @@ export const HERO_CASE_ID = "security_001";
 
 export const COPY = {
   brandSub: "Agent Reliability Control Plane",
-  deterministicMode: "deterministic · $0 pipeline",
+  deterministicMode: "deterministic / $0 pipeline",
   chatModel: "gpt-5.5",
 } as const;
 
@@ -12,11 +12,11 @@ export const VERDICT = {
   idle: { label: "Standby", sub: "Awaiting baseline run" },
   baseline: { label: "Baseline Failing", sub: "Deterministic checks failing on the primary case" },
   proposal: { label: "Fix Proposed", sub: "Correction selected for review" },
-  approved: { label: "Fix Approved — staged", sub: "Human approval locked" },
+  approved: { label: "Fix Approved - staged", sub: "Human approval locked" },
   patched: { label: "Recovered", sub: "Patched rerun shows scorer recovery" },
   counterfactualClean: {
     label: "Verified Reliable",
-    sub: "Primary case recovered — regression replay stayed clean",
+    sub: "Primary case recovered - regression replay stayed clean",
   },
   counterfactualDirty: {
     label: "Regression Detected",

@@ -12,6 +12,7 @@ import {
   buildArtifactHistory,
   buildBudgetView,
   buildCorrectionView,
+  buildDemoBriefView,
   buildEvalDeltaView,
   buildEventStream,
   buildFailureView,
@@ -26,6 +27,7 @@ import { COMMANDS, COPY, LIVE, PHASE_LABEL, PHASES } from "./constants";
 import { useRipple } from "./motion";
 import {
   CorrectionPanel,
+  DemoBrief,
   EventStream,
   FailedCase,
   IdleNote,
@@ -160,6 +162,7 @@ export function LoopieCockpit() {
   const scorecard = buildScorecard(state, phase);
   const swarm = buildSwarmView(state, phase, loading || agentRunning);
   const traceIsPassing = tracePassing(state, phase);
+  const demoBrief = buildDemoBriefView(state, phase);
 
   return (
     <div className="loopie-cockpit-root">
@@ -305,10 +308,18 @@ export function LoopieCockpit() {
             </div>
           </header>
 
+          <DemoBrief brief={demoBrief} />
+
           <VerdictStrip verdict={verdict} />
 
           <div className="grid">
-            <Panel title="Reliability Scorecard" area="scorecard" live={!!live.scorecard} scroll>
+            <Panel
+              title="Reliability Scorecard"
+              subtitle="deterministic pass/fail proof"
+              area="scorecard"
+              live={!!live.scorecard}
+              scroll
+            >
               {scorecard ? (
                 <Scorecard data={scorecard} phase={phase} />
               ) : (
@@ -317,7 +328,8 @@ export function LoopieCockpit() {
             </Panel>
 
             <Panel
-              title="Live Event Stream"
+              title="Audit Event Stream"
+              subtitle="Redis and run events"
               area="stream"
               live={!!live.stream}
               tag={`${events.length} events`}
@@ -325,7 +337,7 @@ export function LoopieCockpit() {
               <EventStream events={events} />
             </Panel>
 
-            <Panel title="Failing Case" area="case" live={!!live.case}>
+            <Panel title="Failing Case" subtitle="the refund ticket under test" area="case" live={!!live.case}>
               <FailedCase failure={failure} />
             </Panel>
 
@@ -354,7 +366,12 @@ export function LoopieCockpit() {
               )}
             </Panel>
 
-            <Panel title="Proposed Correction" area="correction" live={!!live.correction}>
+            <Panel
+              title="Proposed Correction"
+              subtitle="reviewable Redis artifact change"
+              area="correction"
+              live={!!live.correction}
+            >
               <CorrectionPanel
                 correction={correction}
                 canApprove={phase === "proposal"}
@@ -363,7 +380,13 @@ export function LoopieCockpit() {
               />
             </Panel>
 
-            <Panel title="Score Delta (before → after)" area="delta" live={!!live.delta} scroll={false}>
+            <Panel
+              title="Score Delta (before -> after)"
+              subtitle="same eval, two artifact states"
+              area="delta"
+              live={!!live.delta}
+              scroll={false}
+            >
               {evalDelta ? (
                 <EvalDelta data={evalDelta} />
               ) : (
@@ -371,7 +394,13 @@ export function LoopieCockpit() {
               )}
             </Panel>
 
-            <Panel title="Artifact Time Machine" area="timemachine" live={!!live.timemachine} scroll={false}>
+            <Panel
+              title="Artifact Time Machine"
+              subtitle="approved runtime versions"
+              area="timemachine"
+              live={!!live.timemachine}
+              scroll={false}
+            >
               <TimeMachine history={artifactHistory} />
             </Panel>
 
@@ -389,7 +418,7 @@ export function LoopieCockpit() {
               )}
             </Panel>
 
-            <Panel title="Budget Meter" area="budget" live={!!live.budget} scroll={false}>
+            <Panel title="Budget Meter" subtitle="mock-first cost guardrail" area="budget" live={!!live.budget} scroll={false}>
               <BudgetMeter budget={budget} />
             </Panel>
           </div>

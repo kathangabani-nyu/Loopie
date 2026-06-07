@@ -195,7 +195,7 @@ function formatReceipt(receipt: TraceReceipt): string {
   }
   if (receipt.audit_event_id) parts.push(`audit #${String(receipt.audit_event_id)}`);
   if (!parts.length) return JSON.stringify(receipt);
-  return parts.join(" · ");
+  return parts.join(" / ");
 }
 
 export function CausalityTrace({ trace, runKey }: { trace: TraceNode[]; runKey: string }) {
@@ -560,7 +560,7 @@ export function SwarmRunTelemetry({
     <div className="swarmTelemetry">
       <div className="swarmHead mono">
         <span>
-          {data.agentCount} agents · langgraph · {data.providerMode}
+          {data.agentCount} agents / langgraph / {data.providerMode}
         </span>
         <span className="dim">pipeline ${data.budgetUsd.toFixed(3)}</span>
       </div>

@@ -114,6 +114,7 @@ export type CorrectionView = {
   id: string;
   title: string;
   rationale: string;
+  decisionBasis: string;
   confidence: number;
   risk: string;
   target: string;
@@ -131,6 +132,22 @@ export type FailureView = {
   title: string;
   input: string;
   scores: Record<string, number>;
+  failedScorers: string[];
+  observedAction?: string;
+  expectedAction?: string;
+  exactError: string;
+};
+
+export type DemoStep = {
+  label: string;
+  status: "todo" | "active" | "done" | "blocked";
+};
+
+export type DemoBriefView = {
+  headline: string;
+  subhead: string;
+  presenterLine: string;
+  steps: DemoStep[];
 };
 
 export type EvalDeltaView = {

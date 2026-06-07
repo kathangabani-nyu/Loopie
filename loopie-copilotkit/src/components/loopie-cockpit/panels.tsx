@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { SCORE_ORDER } from "./constants";
-import type { CorrectionView, FailureView, StreamEvent } from "./types";
+import type { CorrectionView, DemoBriefView, FailureView, StreamEvent } from "./types";
 import { CountUp, riseIn, sceneStagger, useRipple } from "./motion";
 import { BlastRadius } from "./viz";
 
@@ -43,7 +43,7 @@ export function Panel({
             />
             <span>
               {title}
-              {subtitle ? <span className="panel-sub mid"> — {subtitle}</span> : null}
+              {subtitle ? <span className="panel-sub mid"> - {subtitle}</span> : null}
             </span>
             <span className="spacer" />
             {tag ? <span className="tag">{tag}</span> : null}
@@ -73,6 +73,27 @@ export function IdleNote({ label }: { label: string }) {
       </svg>
       <span className="mono">{label}</span>
     </div>
+  );
+}
+
+export function DemoBrief({ brief }: { brief: DemoBriefView }) {
+  return (
+    <section className="demoBrief">
+      <div className="demoBriefCopy">
+        <div className="demoEyebrow">3-minute story</div>
+        <h2>{brief.headline}</h2>
+        <p>{brief.subhead}</p>
+        <div className="presenterLine">{brief.presenterLine}</div>
+      </div>
+      <div className="demoSteps" aria-label="Loopie demo proof path">
+        {brief.steps.map((step, i) => (
+          <div key={step.label} className={`demoStep ${step.status}`}>
+            <span className="demoStepNum mono">{i + 1}</span>
+            <span className="demoStepLabel">{step.label}</span>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -124,6 +145,22 @@ export function FailedCase({ failure }: { failure: FailureView | null }) {
             {failure.title}
           </div>
           <div className="caseinput">{failure.input}</div>
+          <div className="errorBox">
+            <div>
+              <span className="errorBoxLabel">Exact error</span>
+              <p>{failure.exactError}</p>
+            </div>
+            <div className="actionCompare">
+              <div>
+                <span className="errorBoxLabel">Swarm did</span>
+                <strong>{failure.observedAction || "unknown"}</strong>
+              </div>
+              <div>
+                <span className="errorBoxLabel">Should do</span>
+                <strong>{failure.expectedAction || "see scorer"}</strong>
+              </div>
+            </div>
+          </div>
         </div>
       </motion.div>
       <motion.div key="scores" className="scores" variants={riseIn}>
@@ -200,9 +237,13 @@ export function CorrectionPanel({
       <motion.div key="rationale" className="corrrationale" variants={riseIn}>
         {correction.rationale}
       </motion.div>
+      <motion.div key="decision" className="decisionBasis" variants={riseIn}>
+        <span>How the fix was chosen</span>
+        <p>{correction.decisionBasis}</p>
+      </motion.div>
       <motion.div key="diff" className="diff" variants={riseIn}>
         <div className="diffhead">
-          <span>diff</span>
+          <span>Redis artifact diff</span>
           <span className="spacer" style={{ flex: 1 }} />
           <span>{correction.artifact}</span>
         </div>
