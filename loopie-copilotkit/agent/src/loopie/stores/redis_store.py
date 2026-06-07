@@ -14,7 +14,12 @@ PREFIX = "loopie:"
 
 class RedisStore:
     def __init__(self, url: str | None = None) -> None:
-        self._client = redis.Redis.from_url(url or get_settings().redis_url, decode_responses=True)
+        self._client = redis.Redis.from_url(
+            url or get_settings().redis_url,
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
 
     def ping(self) -> bool:
         return bool(self._client.ping())

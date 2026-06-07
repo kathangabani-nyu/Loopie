@@ -158,6 +158,7 @@ export function useLoopieCockpit(options: UseLoopieCockpitOptions = {}) {
         await refresh();
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "Action failed");
+        await refresh().catch(() => {});
         throw err;
       }
     },

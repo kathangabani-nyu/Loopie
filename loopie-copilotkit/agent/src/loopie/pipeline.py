@@ -456,11 +456,32 @@ class LoopiePipeline:
         }
 
     def export_state(self) -> dict[str, Any]:
-        self.state["events"] = (
-            self.redis.xread_recent("evals")
-            + self.redis.xread_recent("swarm")
-            + self.redis.xread_recent("corrections")
-        )
-        self.state["preflight"] = run_preflight(redis=self.redis, ledger=self.ledger)
-        self._refresh_export_budget()
+        try:
+            self.state["events"] = (
+                self.redis.xread_recent("evals")
+                + self.redis.xread_recent("swarm")
+                + self.redis.xread_recent("corrections")
+            )
+        except Exception as exc:
+            self.state["events"] = self.state.get("events", [])
+            self.state["eventStreamError"] = f"{type(exc).__name__}: {exc}"
+
+        try:
+            self.state["preflight"] = run_preflight(redis=self.redis, ledger=self.ledger)
+        except Exception as exc:
+            self.state["preflight"] = {
+                "ok": False,
+                "redis_reachable": False,
+                "postgres_reachable": False,
+                "weave_enabled": get_settings().weave_enabled,
+                "weave_flag": get_settings().weave_enabled,
+                "provider_mode": self._llm_mode(),
+                "llm_mode": self._llm_mode(),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+        try:
+            self._refresh_export_budget()
+        except Exception as exc:
+            self.state["budgetError"] = f"{type(exc).__name__}: {exc}"
         return self.state
