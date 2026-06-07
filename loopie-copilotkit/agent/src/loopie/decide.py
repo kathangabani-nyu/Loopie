@@ -4,6 +4,26 @@ from __future__ import annotations
 
 from typing import Any
 
+# Single source of truth for graded actions (oracle + LLM structured-output enum).
+ALLOWED_ACTIONS: frozenset[str] = frozenset(
+    {
+        "approve_refund",
+        "ask_clarification",
+        "block_refund_tool",
+        "block_unauthorized_refund",
+        "check_enterprise_override",
+        "deny_refund_offer_credit",
+        "escalate_after_loop",
+        "escalate_billing_review",
+        "escalate_manual_review",
+        "escalate_security",
+        "escalate_stuck_lookup",
+        "require_fresh_policy_version",
+        "require_security_review",
+        "retry_policy_lookup",
+    }
+)
+
 
 def _routing_rules(artifacts: dict[str, Any]) -> list[dict[str, Any]]:
     return list(artifacts.get("routing_rules") or [])

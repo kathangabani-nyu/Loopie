@@ -4,7 +4,12 @@ import { useCallback, useEffect, useState } from "react";
 
 type LoopieState = {
   runs?: Record<string, unknown>;
-  currentFailure?: { case_id?: string; category?: string; scores?: Record<string, boolean> } | null;
+  currentFailure?: {
+    case_id?: string;
+    category?: string;
+    scores?: Record<string, boolean>;
+    run?: RunReceipt;
+  } | null;
   proposedCorrections?: Array<{ id?: string; summary?: string; proposal?: Record<string, unknown> }>;
   artifactHistory?: Array<Record<string, unknown>>;
   evalDelta?: Record<string, unknown>;
@@ -14,6 +19,15 @@ type LoopieState = {
   approvalState?: string;
 };
 
+type RunReceipt = {
+  action?: string;
+  artifact_hash?: string;
+  decided_by?: string;
+  fallback_used?: boolean;
+  decision_schema_version?: string;
+  prompt_version?: string;
+};
+
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="rounded-lg border border-[--border] bg-[--card] p-4">
@@ -21,6 +35,30 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
       {children}
     </section>
   );
+}
+
+function ReceiptChip({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "good" | "warn" }) {
+  const toneClass =
+    tone === "good"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      : tone === "warn"
+        ? "border-amber-200 bg-amber-50 text-amber-900"
+        : "border-[--border] bg-[--muted] text-[--foreground]";
+
+  return (
+    <span className={`inline-flex min-h-8 items-center gap-1 rounded-md border px-2.5 py-1 text-xs ${toneClass}`}>
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-semibold">{value}</span>
+    </span>
+  );
+}
+
+function asRunReceipt(value: unknown): RunReceipt | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.run && typeof record.run === "object") return record.run as RunReceipt;
+  if (!("artifact_hash" in record) && !("decided_by" in record) && !("fallback_used" in record)) return undefined;
+  return record as RunReceipt;
 }
 
 async function post(action: string, body: Record<string, unknown> = {}) {
@@ -82,6 +120,13 @@ export function LoopieCockpit() {
 
   const failure = state.currentFailure;
   const proposal = state.proposedCorrections?.[0];
+  const lastRun = asRunReceipt(lastResult) || failure?.run;
+  const artifactHash = lastRun?.artifact_hash ? lastRun.artifact_hash.slice(0, 8) : "pending";
+  const fallbackUsed = lastRun?.fallback_used === true;
+  const noRegression =
+    typeof state.counterfactual?.no_regression === "boolean"
+      ? state.counterfactual.no_regression ? "clear" : "regression"
+      : "pending";
 
   return (
     <div className="h-full overflow-y-auto bg-[--background] p-6 space-y-4">
@@ -110,6 +155,17 @@ export function LoopieCockpit() {
           <pre className="text-xs bg-black/5 p-2 rounded overflow-x-auto max-h-32">{JSON.stringify(lastResult, null, 2)}</pre>
         </Panel>
       )}
+
+      <Panel title="Run Receipts">
+        <div className="flex flex-wrap gap-2">
+          <ReceiptChip label="scoring" value="deterministic" tone="good" />
+          <ReceiptChip label="decision" value={lastRun?.decided_by || "pending"} tone={lastRun?.decided_by === "llm" ? "good" : "neutral"} />
+          <ReceiptChip label="fallback" value={fallbackUsed ? "used" : "clear"} tone={fallbackUsed ? "warn" : "good"} />
+          <ReceiptChip label="artifact" value={artifactHash} />
+          <ReceiptChip label="approval" value={state.approvalState || "idle"} tone={state.approvalState === "approved" ? "good" : "neutral"} />
+          <ReceiptChip label="no-regression" value={noRegression} tone={noRegression === "clear" ? "good" : noRegression === "regression" ? "warn" : "neutral"} />
+        </div>
+      </Panel>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <Panel title="Event Stream">

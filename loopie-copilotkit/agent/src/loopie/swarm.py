@@ -14,18 +14,7 @@ from src.loopie.state import LoopieState
 from src.loopie.stores.redis_store import RedisStore
 from src.loopie.tools import execute_tool
 
-try:
-    import weave
-
-    _weave_available = True
-except ImportError:
-    _weave_available = False
-
-
-def _op(name: str):
-    if _weave_available:
-        return weave.op(name=name)
-    return lambda fn: fn
+from src.loopie.observability import op as _op
 
 
 @_op("triage")

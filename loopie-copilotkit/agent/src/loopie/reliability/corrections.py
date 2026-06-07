@@ -6,6 +6,7 @@ import json
 import uuid
 from typing import Any
 
+from src.loopie.observability import op
 from src.loopie.stores.ledger import Ledger
 from src.loopie.stores.redis_store import RedisStore
 
@@ -126,6 +127,7 @@ def _commit_artifact(
     }
 
 
+@op("corrections.apply")
 def apply(
     correction: dict[str, Any],
     *,

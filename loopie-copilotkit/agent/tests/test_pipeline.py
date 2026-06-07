@@ -80,7 +80,8 @@ def test_run_suite_mock_zero_cost(monkeypatch):
     assert pipeline.ledger.total_cost(mode="mock") == 0.0
 
 
-def test_live_equals_oracle_on_security_case(monkeypatch):
+def test_mock_run_records_oracle_decision(monkeypatch):
+    """Mock mode always uses oracle — live differential lives in tests/test_live.py."""
     from src.loopie.decide import decide_action
     from src.loopie.pipeline import LoopiePipeline
     from src.loopie.runner import run_ticket, tickets_by_id
@@ -124,6 +125,17 @@ def test_live_equals_oracle_on_security_case(monkeypatch):
         def xread_recent(self, stream, count=50):
             return []
 
+        def get_live_artifacts(self):
+            memory_raw = self.get_memory("policy:refund_window")
+            memory = {}
+            if memory_raw:
+                memory["policy:refund_window"] = memory_raw.get("value", "")
+            return {
+                "memory": memory,
+                "routing_rules": self.get_routing_rules(),
+                "max_transitions": int(self.get_config("max_transitions", "6") or "6"),
+            }
+
     pipeline = LoopiePipeline()
     pipeline.redis = MemoryRedis()
     pipeline.seed()
@@ -132,3 +144,5 @@ def test_live_equals_oracle_on_security_case(monkeypatch):
     oracle = decide_action(ticket, artifacts)
     run = run_ticket(ticket, redis=pipeline.redis, ledger=pipeline.ledger, mode="mock")
     assert run["action"] == oracle
+    assert run["decided_by"] == "oracle"
+    assert run["fallback_used"] is False

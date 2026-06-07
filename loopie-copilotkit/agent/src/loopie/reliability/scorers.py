@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.loopie.observability import op
+
 
 def action_match(run: dict[str, Any], ticket: dict[str, Any]) -> bool:
     return run.get("action") == ticket.get("expected_action")
@@ -50,6 +52,7 @@ SCORERS = {
 }
 
 
+@op("score_run")
 def score_run(run: dict[str, Any], ticket: dict[str, Any]) -> dict[str, bool]:
     return {name: fn(run, ticket) for name, fn in SCORERS.items()}
 

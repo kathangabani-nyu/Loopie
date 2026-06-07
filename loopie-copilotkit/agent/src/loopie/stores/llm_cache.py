@@ -9,8 +9,21 @@ from src.loopie.config import get_settings
 _CACHE: dict[str, str] = {}
 
 
-def cache_key(*, model: str, node: str, fixture_id: str, artifact_version: str) -> str:
-    return f"{model}|{node}|{fixture_id}|{artifact_version}"
+def cache_key(
+    *,
+    model: str,
+    node: str,
+    fixture_id: str,
+    artifact_version: str,
+    provider: str = "openai",
+    prompt_version: str = "v1",
+    schema_version: str = "v1",
+    artifact_hash: str = "",
+) -> str:
+    return (
+        f"{provider}|{model}|{node}|{fixture_id}|{artifact_version}"
+        f"|{prompt_version}|{schema_version}|{artifact_hash}"
+    )
 
 
 def get_cached(key: str) -> str | None:
