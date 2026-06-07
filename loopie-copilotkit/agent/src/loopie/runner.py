@@ -11,7 +11,6 @@ from src.loopie.artifacts import artifact_content_hash
 from src.loopie.config import get_settings, normalize_llm_mode
 from src.loopie.decide import LIVE_DECISION_CASES, decide_action, decide_tool_calls
 from src.loopie.observability import ensure_weave, op
-from src.loopie.weave_status import _plain_scores as _plain_scores_for_run, mark_run_scorer_failures
 from src.loopie.reliability.budget import BudgetTracker
 from src.loopie.run_context import RunContext, run_ctx
 from src.loopie.stores.ledger import Ledger
@@ -127,10 +126,6 @@ def _execute_run(
         "budget_guard_triggered": bool(final_state.get("budget_guard_triggered", False)),
     }
     redis.xadd("swarm", {"event": "run_completed", "case_id": ticket["case_id"], "action": action})
-    scores = _plain_scores_for_run(run, ticket)
-    run["scores"] = scores
-    if not all(scores.values()):
-        mark_run_scorer_failures(run=run, ticket=ticket, node="run_ticket", scores=scores)
     return run
 
 

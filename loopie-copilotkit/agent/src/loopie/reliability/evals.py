@@ -17,7 +17,6 @@ from src.loopie.observability import (
     weave_eval_browse_url,
     weave_eval_url,
 )
-from src.loopie.weave_status import LoopieEvalFailure, mark_current_call_failed
 from src.loopie.reliability.budget import BudgetTracker
 from src.loopie.reliability.scorers import SCORERS, run_passed, score_run
 from src.loopie.runner import load_tickets, run_ticket
@@ -60,15 +59,7 @@ def _build_weave_scorers() -> list[Any]:
     def make_scorer(name: str, fn: Callable[[dict[str, Any], dict[str, Any]], bool]):
         @weave.op(name=f"scorer.{name}")
         def scorer(output: dict[str, Any], ticket: dict[str, Any]) -> dict[str, bool]:
-            passed = fn(output, ticket)
-            if not passed:
-                mark_current_call_failed(
-                    LoopieEvalFailure(
-                        f"scorer.{name} failed for case {ticket.get('case_id')} "
-                        f"(action={output.get('action')!r}, expected={ticket.get('expected_action')!r})"
-                    )
-                )
-            return {name: passed}
+            return {name: fn(output, ticket)}
 
         return scorer
 

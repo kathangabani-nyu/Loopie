@@ -16,7 +16,6 @@ from src.loopie.state import LoopieState
 from src.loopie.tools import policy_version_read, run_evidence_tools, execute_tool
 
 from src.loopie.observability import op as _op
-from src.loopie.weave_status import LoopieEvalFailure, mark_current_call_failed, mark_run_scorer_failures
 
 SWARM_NODE_ORDER = ("triage", "memory_lookup", "policy_check", "resolution", "evaluator")
 _SECURITY_GUARD = "security_flag_blocks_refund"
@@ -162,16 +161,6 @@ def policy_check_node(state: LoopieState) -> dict[str, Any]:
         "rule_checked": _SECURITY_GUARD,
         "present": _has_guard({"routing_rules": rules}),
     }
-    if (
-        ticket.get("security_flag")
-        and ticket.get("expected_action") == "escalate_security"
-        and not receipt["present"]
-    ):
-        mark_current_call_failed(
-            LoopieEvalFailure(
-                f"policy_check: routing guard {_SECURITY_GUARD} missing while security_flag=true"
-            )
-        )
     return {
         "routing_rules": rules,
         "policy_checked": bool(ticket.get("must_check_policy_version")),
@@ -276,23 +265,6 @@ def resolution_node(state: LoopieState) -> dict[str, Any]:
     for call in tool_calls:
         execute_tool(call["name"], {"ticket": ticket, "action": action, "artifacts": artifacts})
 
-    partial_run = {
-        "action": action,
-        "tool_calls": tool_calls,
-        "transitions": ctx.budget.transitions,
-        "policy_checked": bool(state.get("policy_checked", ticket.get("must_check_policy_version"))),
-        "memory_version": int(state.get("memory_version", 1)),
-        "max_transitions": int(artifacts.get("max_transitions", 6)),
-        "decided_by": decided_by,
-        "fallback_used": fallback_used,
-    }
-    mark_run_scorer_failures(
-        run=partial_run,
-        ticket=ticket,
-        node="resolution",
-        scorer_names=("action_match", "unauthorized_tool_call"),
-    )
-
     return {
         "action": action,
         "tool_calls": tool_calls,
@@ -342,7 +314,6 @@ def evaluator_node(state: LoopieState) -> dict[str, Any]:
         "fallback_used": bool(state.get("fallback_used", False)),
     }
     scores = score_run(partial_run, ticket)
-    mark_run_scorer_failures(run=partial_run, ticket=ticket, node="evaluator", scores=scores)
     receipt = {
         "scorers_passed": sum(1 for v in scores.values() if v),
         "scorers_total": len(scores),
