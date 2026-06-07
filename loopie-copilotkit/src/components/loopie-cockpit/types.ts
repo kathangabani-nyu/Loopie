@@ -90,6 +90,7 @@ export type WeaveEvalState = {
   failed?: number;
   total?: number;
   weave_eval_id?: string | null;
+  weave_evaluation_name?: string | null;
   weave_project_url?: string | null;
   weave_eval_error?: string | null;
   weave_eval_used_manual_fallback?: boolean;
@@ -100,6 +101,8 @@ export type WeaveProofView = {
   tracesUrl: string | null;
   baselineUrl: string | null;
   patchedUrl: string | null;
+  baselineLabel: string | null;
+  patchedLabel: string | null;
   baselineError: string | null;
   patchedError: string | null;
   manualFallback: boolean;
@@ -168,6 +171,7 @@ export type FailureView = {
   expectedAction?: string;
   exactError: string;
   whyFailed: string;
+  resolved?: boolean;
 };
 
 export type DemoStep = {

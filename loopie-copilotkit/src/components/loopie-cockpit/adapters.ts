@@ -283,9 +283,14 @@ export function buildSwarmView(state: LoopieState, phase: Phase, running: boolea
   };
 }
 
-export function buildFailureView(state: LoopieState): FailureView | null {
+export function buildFailureView(state: LoopieState, phase: Phase): FailureView | null {
   const failure = state.currentFailure?.case_id ? state.currentFailure : failedBaselineAsFailure(state);
   if (!failure?.case_id) return null;
+
+  const patched = patchedScores(state);
+  const resolved =
+    (phase === "patched" || phase === "counterfactual") &&
+    Boolean(patched && Object.values(patched).every(Boolean));
 
   const run = failure.run;
   const request =
@@ -295,7 +300,7 @@ export function buildFailureView(state: LoopieState): FailureView | null {
   return {
     case_id: failure.case_id,
     category: failure.category || "unknown_failure",
-    title: CATEGORY_TITLES[failure.category || ""] || "Deterministic eval failure",
+    title: resolved ? "Baseline failure (resolved)" : CATEGORY_TITLES[failure.category || ""] || "Deterministic eval failure",
     input: request,
     scores: boolScoresToNumeric(failure.scores || {}),
     failedScorers: failedScorers(failure.scores),
@@ -303,6 +308,7 @@ export function buildFailureView(state: LoopieState): FailureView | null {
     expectedAction: expectedActionForCategory(failure.category),
     exactError: exactErrorForFailure(failure),
     whyFailed: whyFailedForCategory(failure),
+    resolved,
   };
 }
 
@@ -448,6 +454,8 @@ export function buildWeaveProofView(state: LoopieState): WeaveProofView | null {
     tracesUrl: state.preflight?.weave_project_url || null,
     baselineUrl: baseline?.weave_project_url || null,
     patchedUrl: patched?.weave_project_url || null,
+    baselineLabel: baseline?.weave_evaluation_name || baseline?.label || "loopie_baseline_v1",
+    patchedLabel: patched?.weave_evaluation_name || patched?.label || "loopie_patched_v2",
     baselineError: baseline?.weave_eval_error || null,
     patchedError: patched?.weave_eval_error || null,
     manualFallback: false,
@@ -738,7 +746,7 @@ export function buildScorecard(state: LoopieState, phase: Phase): ScorecardView 
 }
 
 export function buildDemoBriefView(state: LoopieState, phase: Phase): DemoBriefView {
-  const failure = buildFailureView(state);
+  const failure = buildFailureView(state, phase);
   const correction = buildCorrectionView(state);
   const improved = Boolean(state.evalDelta?.improved);
   const approved = state.approvalState === "approved";

@@ -69,14 +69,72 @@ def ensure_weave() -> None:
         _weave_initialized = False
 
 
-def weave_eval_url(eval_id: str, *, entity: str | None = None, project: str | None = None) -> str:
+_UUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.I,
+)
+
+
+def _looks_like_weave_eval_id(value: str) -> bool:
+    text = value.strip()
+    if not text or len(text) > 160:
+        return False
+    if text.startswith(("{", "[", "'", '"')):
+        return False
+    if "'output'" in text or "true_count" in text or "true_fraction" in text:
+        return False
+    if _UUID_RE.fullmatch(text.split("/")[-1]):
+        return True
+    return len(text) <= 64 and "/" not in text and " " not in text and "=" not in text
+
+
+def extract_weave_eval_id(eval_result: Any) -> str | None:
+    """Return a Weave evaluation object id suitable for dashboard deep-linking."""
+    if eval_result is None:
+        return None
+
+    candidates: list[Any] = []
+    for attr in ("id", "evaluation_id", "eval_id", "object_id", "digest", "ref", "uri"):
+        candidates.append(getattr(eval_result, attr, None))
+    if isinstance(eval_result, dict):
+        for key in ("id", "evaluation_id", "eval_id", "object_id", "digest", "ref", "uri"):
+            candidates.append(eval_result.get(key))
+
+    for raw in candidates:
+        if raw is None:
+            continue
+        text = str(raw).strip()
+        if _looks_like_weave_eval_id(text):
+            return text.split("/")[-1]
+        match = _UUID_RE.search(text)
+        if match:
+            return match.group(0)
+    return None
+
+
+def weave_eval_url(eval_id: str, *, entity: str | None = None, project: str | None = None) -> str | None:
     """Deep-link into Weave Compare/Leaderboard for cockpit surfacing."""
+    if not _looks_like_weave_eval_id(eval_id):
+        return None
     settings = get_settings()
     entity = entity or os.getenv("WANDB_ENTITY", "")
     project = project or settings.weave_project
+    clean_id = eval_id.strip().split("/")[-1]
     if entity:
-        return f"https://wandb.ai/{entity}/{project}/weave/evaluations/{eval_id}"
-    return f"https://wandb.ai/{project}/weave/evaluations/{eval_id}"
+        return f"https://wandb.ai/{entity}/{project}/weave/evaluations/{clean_id}"
+    return f"https://wandb.ai/{project}/weave/evaluations/{clean_id}"
+
+
+def weave_eval_browse_url(*, evaluation_name: str, entity: str | None = None, project: str | None = None) -> str | None:
+    """Fallback when Weave returns an aggregate summary without a stable eval object id."""
+    from urllib.parse import quote
+
+    entity = entity or os.getenv("WANDB_ENTITY", "")
+    if not entity:
+        return None
+    settings = get_settings()
+    project = project or settings.weave_project
+    return f"https://wandb.ai/{entity}/{project}/weave/evaluations?search={quote(evaluation_name)}"
 
 
 def weave_traces_url(*, entity: str | None = None, project: str | None = None) -> str | None:

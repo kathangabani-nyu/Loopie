@@ -154,7 +154,7 @@ export function LoopieCockpit() {
   }, [autopilot, phase, advance, loading]);
 
   const events = buildEventStream(state.events);
-  const failure = buildFailureView(state);
+  const failure = buildFailureView(state, phase);
   const trace = buildTraceView(state, phase);
   const correction = buildCorrectionView(state);
   const evalDelta = buildEvalDeltaView(state);
@@ -448,7 +448,16 @@ export function LoopieCockpit() {
               <EventStream events={events} />
             </Panel>
 
-            <Panel title="Failing Case" subtitle="the refund ticket under test" area="case" live={!!live.case}>
+            <Panel
+              title={failure?.resolved ? "Baseline Failure" : "Failing Case"}
+              subtitle={
+                failure?.resolved
+                  ? "archived — patch recovered the hero case"
+                  : "the refund ticket under test"
+              }
+              area="case"
+              live={!!live.case}
+            >
               <FailedCase failure={failure} />
             </Panel>
 

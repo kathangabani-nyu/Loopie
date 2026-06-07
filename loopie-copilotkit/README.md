@@ -1,10 +1,24 @@
-# CopilotKit <> LangGraph Starter
+# Loopie CopilotKit App
 
-This is a starter template for building AI agents using [LangGraph](https://www.langchain.com/langgraph) and [CopilotKit](https://copilotkit.ai). It provides a modern Next.js application with an integrated LangGraph agent to be built on top of.
+> **Full project README:** see [`../README.md`](../README.md) for architecture, stack overview, and deployment.
 
-https://github.com/user-attachments/assets/47761912-d46a-4fb3-b9bd-cb41ddd02e34
+This directory contains the Loopie implementation — Next.js cockpit, CopilotKit integration, and Python agent/API backend.
 
-## Prerequisites
+## Quick start
+
+```bash
+cp .env.example .env
+npm install
+npm run dev
+```
+
+- UI: http://localhost:3000  
+- API: http://localhost:8001  
+- Agent: http://localhost:8123  
+
+See the [root README](../README.md) for Weave, Redis, Postgres, and hosted setup details.
+
+---
 
 - Node.js 18+
 - Python 3.12+

@@ -9,7 +9,14 @@ from typing import Any, Callable
 
 from src.loopie.artifacts import apply_seed_artifacts_to_redis
 from src.loopie.config import get_settings
-from src.loopie.observability import _postprocess_inputs, ensure_weave, op, weave_eval_url
+from src.loopie.observability import (
+    _postprocess_inputs,
+    ensure_weave,
+    extract_weave_eval_id,
+    op,
+    weave_eval_browse_url,
+    weave_eval_url,
+)
 from src.loopie.reliability.budget import BudgetTracker
 from src.loopie.reliability.scorers import SCORERS, run_passed, score_run
 from src.loopie.runner import load_tickets, run_ticket
@@ -205,6 +212,7 @@ def evaluate_suite(
     effective_mode = mode or settings.llm_mode
     tickets = load_tickets(limit=limit or settings.max_eval_cases_per_dev_run)
     artifact_version = "v2" if label == "patched" else "v1"
+    evaluation_name = f"loopie_{label}_{artifact_version}"
 
     if label == "baseline":
         apply_seed_artifacts_to_redis(redis)
@@ -265,7 +273,7 @@ def evaluate_suite(
             "iteration": label,
             "artifact_version": artifact_version,
             "case_family": "suite",
-            "display_name": f"loopie_{label}_{artifact_version}",
+            "display_name": evaluation_name,
             "compare_group": "loopie_suite",
         }
         if correction_id:
@@ -287,7 +295,7 @@ def evaluate_suite(
                 "ticket": row["ticket"],
                 "artifact_version": row["artifact_version"],
             },
-            evaluation_name=f"loopie_{label}_{artifact_version}",
+            evaluation_name=evaluation_name,
         )
 
         eval_coro = None
@@ -295,7 +303,7 @@ def evaluate_suite(
             with weave.attributes(attrs):
                 eval_coro = evaluation.evaluate(predictor)
                 eval_result = asyncio.run(eval_coro)
-            weave_eval_id = str(getattr(eval_result, "id", None) or eval_result)
+            weave_eval_id = extract_weave_eval_id(eval_result)
             _collect_results()
         except Exception as exc:
             if inspect.iscoroutine(eval_coro):
@@ -332,8 +340,11 @@ def evaluate_suite(
     }
 
     weave_project_url = None
-    if weave_eval_id and os.getenv("WANDB_API_KEY"):
-        weave_project_url = weave_eval_url(weave_eval_id)
+    if os.getenv("WANDB_API_KEY"):
+        if weave_eval_id:
+            weave_project_url = weave_eval_url(weave_eval_id)
+        if not weave_project_url:
+            weave_project_url = weave_eval_browse_url(evaluation_name=evaluation_name)
 
     return {
         "label": label,
@@ -343,6 +354,7 @@ def evaluate_suite(
         "results": results,
         "artifact_version": artifact_version,
         "weave_eval_id": weave_eval_id,
+        "weave_evaluation_name": evaluation_name,
         "weave_eval_error": weave_eval_error,
         "weave_eval_used_manual_fallback": weave_eval_used_manual_fallback,
         "weave_project_url": weave_project_url,

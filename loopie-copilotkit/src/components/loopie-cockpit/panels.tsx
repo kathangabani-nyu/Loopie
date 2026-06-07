@@ -76,12 +76,19 @@ export function IdleNote({ label }: { label: string }) {
   );
 }
 
-function weaveLinkLabel(url: string): string {
+function weaveLinkLabel(url: string, fallback = "open eval"): string {
   try {
-    const parts = new URL(url).pathname.split("/").filter(Boolean);
-    return parts[parts.length - 1] || "open eval";
+    const parsed = new URL(url);
+    const search = parsed.searchParams.get("search");
+    if (search) return search;
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const last = parts[parts.length - 1] || "";
+    if (last && last.length <= 48 && !last.startsWith("%7B") && !last.includes("'output'")) {
+      return last;
+    }
+    return fallback;
   } catch {
-    return "open eval";
+    return fallback;
   }
 }
 
@@ -111,7 +118,7 @@ export function WeaveProofPanel({ proof }: { proof: WeaveProofView }) {
           <span className="weave-proof-label">Baseline</span>
           {proof.baselineUrl ? (
             <a className="weave-proof-link" href={proof.baselineUrl} target="_blank" rel="noreferrer">
-              {weaveLinkLabel(proof.baselineUrl)}
+              {weaveLinkLabel(proof.baselineUrl, proof.baselineLabel || "open baseline eval")}
             </a>
           ) : proof.baselineError ? (
             <span className="weave-proof-error">{proof.baselineError}</span>
@@ -123,7 +130,7 @@ export function WeaveProofPanel({ proof }: { proof: WeaveProofView }) {
           <span className="weave-proof-label">Patched</span>
           {proof.patchedUrl ? (
             <a className="weave-proof-link" href={proof.patchedUrl} target="_blank" rel="noreferrer">
-              {weaveLinkLabel(proof.patchedUrl)}
+              {weaveLinkLabel(proof.patchedUrl, proof.patchedLabel || "open patched eval")}
             </a>
           ) : proof.patchedError ? (
             <span className="weave-proof-error">{proof.patchedError}</span>
@@ -199,13 +206,21 @@ export function FailedCase({ failure }: { failure: FailureView | null }) {
         <div className="casemeta">
           <div className="casechips">
             <span className="chip id">{failure.case_id}</span>
-            <span className="chip fail">{failure.category}</span>
+            <span className={`chip${failure.resolved ? " ok" : " fail"}`}>
+              {failure.resolved ? "resolved" : failure.category}
+            </span>
           </div>
           <div className="casetitle" style={{ marginTop: 8 }}>
             {failure.title}
           </div>
-          <div className="caseinput">{failure.input}</div>
-          <div className="errorBox">
+          {failure.resolved ? (
+            <div className="caseinput" style={{ opacity: 0.72 }}>
+              Archived baseline failure. The patched rerun recovered all scorers on {failure.case_id}.
+            </div>
+          ) : (
+            <div className="caseinput">{failure.input}</div>
+          )}
+          <div className="errorBox" style={failure.resolved ? { opacity: 0.82 } : undefined}>
             <div>
               <span className="errorBoxLabel">Exact error</span>
               <p>{failure.exactError}</p>

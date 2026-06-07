@@ -671,6 +671,11 @@
   border-color: rgba(248, 81, 73, 0.4);
   background: rgba(248, 81, 73, 0.1);
 }
+.loopie-cockpit-root .chip.ok {
+  color: var(--teal);
+  border-color: rgba(63, 185, 80, 0.35);
+  background: rgba(63, 185, 80, 0.1);
+}
 .loopie-cockpit-root .chip.id {
   color: var(--accent);
   border-color: rgba(88, 166, 255, 0.35);
