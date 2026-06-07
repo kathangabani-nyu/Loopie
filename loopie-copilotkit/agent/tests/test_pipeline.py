@@ -73,3 +73,27 @@ def test_mock_run_records_oracle_decision(monkeypatch):
     assert run["action"] == oracle
     assert run["decided_by"] == "oracle"
     assert run["fallback_used"] is False
+
+
+def test_pipeline_records_operation_timings_and_export_budget(monkeypatch):
+    from src.loopie.pipeline import LoopiePipeline
+
+    from memory_stores import MemoryLedger, MemoryRedis
+
+    pipeline = object.__new__(LoopiePipeline)
+    pipeline.redis = MemoryRedis()
+    pipeline.ledger = MemoryLedger()
+    pipeline.state = LoopiePipeline._initial_state()
+    pipeline.seed()
+    pipeline.run_baseline(case_id="security_001")
+
+    exported = pipeline.export_state()
+    timings = exported.get("operationTimings") or []
+    assert any(entry.get("action") == "baseline" for entry in timings)
+    assert all(entry.get("elapsed_ms", 0) >= 0 for entry in timings)
+
+    budget = exported.get("budget") or {}
+    assert budget.get("actual_model_cost_usd") == 0.0
+    assert budget.get("estimated_run_cost_usd", 0) > 0
+    assert budget.get("wall_clock_s", 0) > 0
+    assert budget.get("estimate_basis") == "wall_clock_ms + trace nodes + eval cases"

@@ -38,6 +38,7 @@ class LoopieControlState(TypedDict, total=False):
     weaveEvalPatched: dict[str, Any]
     events: list[dict[str, Any]]
     budget: dict[str, Any]
+    operationTimings: list[dict[str, Any]]
     approvalState: str
     preflight: dict[str, Any]
 
@@ -78,6 +79,7 @@ def _state_items() -> list[StateItem]:
         "weaveEvalPatched",
         "events",
         "budget",
+        "operationTimings",
         "approvalState",
         "preflight",
     )

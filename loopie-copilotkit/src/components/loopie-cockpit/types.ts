@@ -15,6 +15,7 @@ export type RunReceipt = {
   decision_schema_version?: string;
   prompt_version?: string;
   trace?: Array<Record<string, unknown>>;
+  wall_clock_ms?: number;
   narration?: Record<string, string>;
   budget?: Record<string, unknown>;
   transitions?: number;
@@ -55,10 +56,16 @@ export type LoopieState = {
   counterfactual?: {
     no_regression?: boolean;
     newly_failing?: string[];
-    results?: Record<string, { passed?: boolean; scores?: Record<string, boolean> }>;
+    results?: Record<string, { passed?: boolean; scores?: Record<string, boolean>; run?: RunReceipt }>;
   };
   events?: Array<Record<string, unknown>>;
   budget?: Record<string, unknown>;
+  operationTimings?: Array<{
+    action?: string;
+    elapsed_ms?: number;
+    started_at?: string;
+    finished_at?: string;
+  }>;
   approvalState?: string;
   weaveEvalBaseline?: WeaveEvalState;
   weaveEvalPatched?: WeaveEvalState;
@@ -191,6 +198,9 @@ export type ArtifactVersion = {
 
 export type BudgetView = {
   budget_usd: number;
+  estimated_run_cost_usd: number;
+  actual_model_cost_usd: number;
+  estimate_basis: string;
   estimated_cost_usd: number;
   chat_cost_usd: number;
   max_chat_cost_usd: number;
@@ -198,6 +208,7 @@ export type BudgetView = {
   transitions: number;
   tokens: number;
   wall_clock_s: number;
+  node_time_s: number;
 };
 
 export type VerdictView = {
@@ -209,6 +220,7 @@ export type VerdictView = {
   recovered: number | null;
   regressions: number | null;
   cost: number;
+  actualModelCost: number;
   wallClock: number;
 };
 

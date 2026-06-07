@@ -218,7 +218,7 @@ export function buildSwarmView(state: LoopieState, phase: Phase, running: boolea
   return {
     agents,
     providerMode: state.preflight?.provider_mode || state.preflight?.llm_mode || "mock",
-    budgetUsd: budget.estimated_cost_usd,
+    budgetUsd: budget.estimated_run_cost_usd,
     agentCount: Object.keys(SWARM_AGENTS).length,
   };
 }
@@ -450,21 +450,60 @@ export function buildArtifactHistory(state: LoopieState, phase: Phase): Artifact
   });
 }
 
+function collectRuns(state: LoopieState): RunReceipt[] {
+  const runs: RunReceipt[] = [];
+  for (const entry of Object.values(state.runs || {})) {
+    if (entry?.run) runs.push(entry.run);
+  }
+  for (const entry of Object.values(state.counterfactual?.results || {})) {
+    if (entry?.run) runs.push(entry.run as RunReceipt);
+  }
+  return runs;
+}
+
+function sumTraceDurationMs(state: LoopieState): number {
+  let total = 0;
+  for (const run of collectRuns(state)) {
+    for (const step of run.trace || []) {
+      total += Number(step.duration_ms) || 0;
+    }
+  }
+  return total;
+}
+
+function fallbackWallClockSeconds(state: LoopieState): number {
+  const runs = collectRuns(state);
+  if (!runs.length) return 0;
+  const latestWallMs = Math.max(...runs.map((run) => Number(run.wall_clock_ms) || 0));
+  if (latestWallMs > 0) return latestWallMs / 1000;
+  return sumTraceDurationMs(state) / 1000;
+}
+
 export function buildBudgetView(state: LoopieState): BudgetView {
   const b = state.budget || {};
   const llmCalls = Number(b.llm_calls ?? 0);
   const transitions = Number(b.transitions ?? 0);
-  const cost = Number(b.estimated_cost_usd ?? 0);
+  const estimatedRunCost = Number(b.estimated_run_cost_usd ?? b.estimated_cost_usd ?? 0);
+  const actualModelCost = Number(b.actual_model_cost_usd ?? 0);
+  let wallClockS = Number(b.wall_clock_s ?? 0);
+  if (wallClockS <= 0) {
+    wallClockS = fallbackWallClockSeconds(state);
+  }
+  const nodeTimeS = Number(b.node_time_s ?? sumTraceDurationMs(state) / 1000);
 
   return {
     budget_usd: 1.0,
-    estimated_cost_usd: cost,
+    estimated_run_cost_usd: estimatedRunCost,
+    actual_model_cost_usd: actualModelCost,
+    estimate_basis: String(b.estimate_basis || "wall_clock_ms + trace nodes + eval cases"),
+    estimated_cost_usd: estimatedRunCost,
     chat_cost_usd: Number(b.chat_cost_usd ?? 0),
     max_chat_cost_usd: Number(b.max_chat_cost_usd ?? 40),
     llm_calls: llmCalls,
     transitions,
     tokens: llmCalls * 3200,
-    wall_clock_s: transitions * 1.4,
+    wall_clock_s: wallClockS,
+    node_time_s: nodeTimeS,
   };
 }
 
@@ -532,7 +571,8 @@ export function buildVerdictView(state: LoopieState, phase: Phase): VerdictView 
       scorersTotal: total,
       recovered: null,
       regressions,
-      cost: budget.estimated_cost_usd,
+      cost: budget.estimated_run_cost_usd,
+      actualModelCost: budget.actual_model_cost_usd,
       wallClock: budget.wall_clock_s,
     };
   }
@@ -546,7 +586,8 @@ export function buildVerdictView(state: LoopieState, phase: Phase): VerdictView 
       scorersTotal: total,
       recovered: null,
       regressions,
-      cost: budget.estimated_cost_usd,
+      cost: budget.estimated_run_cost_usd,
+      actualModelCost: budget.actual_model_cost_usd,
       wallClock: budget.wall_clock_s,
     };
   }
@@ -561,7 +602,8 @@ export function buildVerdictView(state: LoopieState, phase: Phase): VerdictView 
       scorersTotal: total,
       recovered: null,
       regressions,
-      cost: budget.estimated_cost_usd,
+      cost: budget.estimated_run_cost_usd,
+      actualModelCost: budget.actual_model_cost_usd,
       wallClock: budget.wall_clock_s,
     };
   }
@@ -577,7 +619,8 @@ export function buildVerdictView(state: LoopieState, phase: Phase): VerdictView 
       scorersTotal: total,
       recovered,
       regressions,
-      cost: budget.estimated_cost_usd,
+      cost: budget.estimated_run_cost_usd,
+      actualModelCost: budget.actual_model_cost_usd,
       wallClock: budget.wall_clock_s,
     };
   }
@@ -590,7 +633,8 @@ export function buildVerdictView(state: LoopieState, phase: Phase): VerdictView 
     scorersTotal: total,
     recovered,
     regressions,
-    cost: budget.estimated_cost_usd,
+    cost: budget.estimated_run_cost_usd,
+    actualModelCost: budget.actual_model_cost_usd,
     wallClock: budget.wall_clock_s,
   };
 }

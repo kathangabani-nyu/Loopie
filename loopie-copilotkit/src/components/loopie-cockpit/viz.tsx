@@ -85,7 +85,7 @@ export function VerdictStrip({ verdict }: { verdict: VerdictView }) {
         </div>
         <VerdictMetric label="Recovered" value={verdict.recovered} prefix="+" />
         <VerdictMetric label="Regressions" value={verdict.regressions} />
-        <VerdictMetric label="Cost" value={verdict.cost} prefix="$" decimals={3} />
+        <VerdictMetric label="Est. Run Cost" value={verdict.cost} prefix="$" decimals={3} />
         <VerdictMetric label="Time" value={verdict.wallClock} suffix="s" decimals={1} />
       </div>
     </motion.section>
@@ -595,7 +595,7 @@ export function SwarmRunTelemetry({
 }
 
 export function BudgetMeter({ budget }: { budget: BudgetView }) {
-  const pct = Math.min(1, budget.estimated_cost_usd / (budget.budget_usd || 1));
+  const pct = Math.min(1, budget.estimated_run_cost_usd / (budget.budget_usd || 1));
 
   const stat = (
     label: string,
@@ -614,9 +614,12 @@ export function BudgetMeter({ budget }: { budget: BudgetView }) {
     <div className="budget">
       <div className="budgethead">
         <div className="bcost mono">
-          <CountUp value={budget.estimated_cost_usd} decimals={3} prefix="$" duration={1} />
+          <CountUp value={budget.estimated_run_cost_usd} decimals={3} prefix="$" duration={1} />
         </div>
-        <div className="bcostlbl mid">of ${budget.budget_usd.toFixed(2)} run budget</div>
+        <div className="bcostlbl mid">estimated run cost (paid-equivalent)</div>
+        <div className="bcostlbl mid">
+          actual API cost: ${budget.actual_model_cost_usd.toFixed(3)}
+        </div>
         <div className="bcostlbl mid">
           chat ${budget.chat_cost_usd.toFixed(3)} / ${budget.max_chat_cost_usd.toFixed(0)}
         </div>
@@ -634,6 +637,7 @@ export function BudgetMeter({ budget }: { budget: BudgetView }) {
         {stat("transitions", budget.transitions)}
         {stat("tokens", budget.tokens)}
         {stat("wall clock", budget.wall_clock_s, { decimals: 1, suffix: "s" })}
+        {stat("node time", budget.node_time_s, { decimals: 1, suffix: "s" })}
       </div>
     </div>
   );

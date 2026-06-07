@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,7 @@ def _execute_run(
     )
     token = run_ctx.set(ctx)
     try:
+        invoke_start = time.perf_counter()
         final_state = graph.invoke(
             {
                 "ticket": ticket,
@@ -84,6 +86,7 @@ def _execute_run(
                 "transitions": 0,
             }
         )
+        wall_clock_ms = round((time.perf_counter() - invoke_start) * 1000, 3)
     finally:
         run_ctx.reset(token)
 
@@ -105,6 +108,7 @@ def _execute_run(
         "memory_version": int(final_state.get("memory_version", memory.get("version", 1))),
         "narration": final_state.get("narration", {}),
         "trace": trace,
+        "wall_clock_ms": wall_clock_ms,
         "swarm_nodes": swarm_nodes,
         "execution_engine": final_state.get("execution_engine", "langgraph_swarm"),
         "mode": mode or settings.llm_mode,
