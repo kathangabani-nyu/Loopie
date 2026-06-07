@@ -11,7 +11,7 @@ from src.loopie.reliability.budget import BudgetTracker
 
 
 @pytest.fixture(autouse=True)
-def mock_mode(monkeypatch):
+def live_mode(monkeypatch):
     monkeypatch.setenv("LOOPIE_LLM_MODE", "live")
     monkeypatch.setenv("LOOPIE_LIVE_CONFIRMED", "1")
     get_settings.cache_clear()

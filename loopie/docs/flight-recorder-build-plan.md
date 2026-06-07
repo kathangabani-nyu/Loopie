@@ -101,7 +101,7 @@ agent loops, hot reloads, broad evals, retries, or bugs.
 Default environment values:
 
 ```text
-LOOPIE_LLM_MODE=mock
+LOOPIE_LLM_MODE=test
 LOOPIE_REQUIRE_LIVE_LLM_CONFIRMATION=true
 LOOPIE_MAX_LLM_CALLS_PER_RUN=8
 LOOPIE_MAX_LLM_CALLS_PER_EVAL=40
@@ -278,7 +278,7 @@ Real data is an enterprise integration step, not a prerequisite for the demo.
 
 ## Build Order
 
-1. Fixtures, expected actions, seed artifacts, and mock LLM responses.
+1. Fixtures, expected actions, seed artifacts, and test oracle responses.
 2. Token-budget guardrails and replay cache.
 3. `loopie_swarm` StateGraph with Redis live substrate.
 4. Baseline run that fails `security_001` for the right reason.
@@ -333,7 +333,7 @@ WANDB_ENTITY=
 WEAVE_PROJECT=loopie
 REDIS_URL=redis://localhost:6379/1
 POSTGRES_URL=postgresql://intelligence:intelligence@localhost:5432/intelligence_app
-LOOPIE_LLM_MODE=mock
+LOOPIE_LLM_MODE=test
 LOOPIE_REQUIRE_LIVE_LLM_CONFIRMATION=true
 LOOPIE_MAX_LLM_CALLS_PER_RUN=8
 LOOPIE_MAX_LLM_CALLS_PER_EVAL=40

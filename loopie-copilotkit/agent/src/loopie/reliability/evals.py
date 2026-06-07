@@ -302,8 +302,12 @@ def evaluate_suite(
                 eval_coro.close()
             weave_eval_error = f"{type(exc).__name__}: {exc}"
             runs_by_case.clear()
+    elif settings.weave_enabled:
+        raise RuntimeError(
+            "W&B Weave is required for this demo path. Set LOOPIE_WEAVE_ENABLED=true "
+            "with WANDB_API_KEY and WANDB_ENTITY on loopie-api."
+        )
     else:
-        weave_eval_used_manual_fallback = True
         _run_manual_suite(
             tickets=tickets,
             dataset=dataset,

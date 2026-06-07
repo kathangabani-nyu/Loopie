@@ -194,7 +194,7 @@ def resolution_node(state: LoopieState) -> dict[str, Any]:
 
     decided_by = "oracle"
     fallback_used = False
-    stop_reason = "mock"
+    stop_reason = "test"
     decision_schema_version = DECISION_SCHEMA_VERSION
     prompt_version = DECISION_PROMPT_VERSION
     cache_hit = False

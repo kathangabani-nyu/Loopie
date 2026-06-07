@@ -24,7 +24,7 @@ import {
   derivePhase,
   tracePassing,
 } from "./adapters";
-import { COMMANDS, COPY, LIVE, PHASE_LABEL, PHASES, SWARM_AGENTS } from "./constants";
+import { COMMANDS, COPY, LIVE, normalizeProviderMode, PHASE_LABEL, PHASES, providerModeLabel, SWARM_AGENTS } from "./constants";
 import { useRipple } from "./motion";
 import {
   CorrectionPanel,
@@ -202,8 +202,10 @@ export function LoopieCockpit() {
         : "#484f58";
   const weaveTracesUrl = state.preflight?.weave_project_url || null;
 
-  const providerMode = swarm?.providerMode || state.preflight?.provider_mode || state.preflight?.llm_mode || "mock";
-  const modeLabel = providerMode === "live" ? "live" : "mock · $0";
+  const providerMode = normalizeProviderMode(
+    swarm?.providerMode || state.preflight?.provider_mode || state.preflight?.llm_mode,
+  );
+  const modeLabel = providerModeLabel(providerMode);
 
   return (
     <div className="loopie-cockpit-root">
@@ -532,7 +534,7 @@ export function LoopieCockpit() {
               )}
             </Panel>
 
-            <Panel title="Budget Meter" subtitle="mock-first cost guardrail" area="budget" live={!!live.budget} scroll={false}>
+            <Panel title="Budget Meter" subtitle="test-first cost guardrail" area="budget" live={!!live.budget} scroll={false}>
               <BudgetMeter budget={budget} />
             </Panel>
           </div>

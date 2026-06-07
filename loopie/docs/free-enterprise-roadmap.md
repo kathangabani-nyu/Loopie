@@ -31,7 +31,7 @@ hot reloads, broad evals, retries, or bugs.
 Planned defaults:
 
 ```text
-LOOPIE_LLM_MODE=mock
+LOOPIE_LLM_MODE=test
 LOOPIE_MAX_LLM_CALLS_PER_RUN=8
 LOOPIE_MAX_LLM_CALLS_PER_EVAL=40
 LOOPIE_MAX_AGENT_TRANSITIONS=6
@@ -42,7 +42,7 @@ LOOPIE_REQUIRE_LIVE_LLM_CONFIRMATION=true
 
 Rules:
 
-- Development should default to mock mode.
+- Development should default to test mode.
 - Live model calls should require an explicit opt-in.
 - Deterministic scorers must never call an LLM.
 - Correction objects should be structured and deterministic; an LLM may summarize evidence but

@@ -72,22 +72,22 @@ We keep a deterministic reference (`decide.py`) but it does **not** replace the 
 
 > The LLM agents decide; their decisions are *grounded in the retrieved Redis artifact*, so at
 > `temperature=0` a stale fact reliably drives the wrong action and the corrected fact reliably
-> drives the right one. `decide.py` is the **golden oracle** used for mock/CI/proof-stability, and
+> drives the right one. `decide.py` is the **golden oracle** used for test/CI/proof-stability, and
 > we assert `live-LLM-swarm == oracle` on the canonical cases (differential test).
 
 Why this is the right reconciliation:
 
 - The failure is still *provably caused by the artifact* (stale memory / missing guard), not by model
   randomness — the improvement stays defensible, not cherry-picked.
-- Dev/CI run on the oracle (mock) at ~zero tokens; the live demo shows real agentic behavior.
+- Dev/CI run on the oracle (test) at ~zero tokens; the live demo shows real agentic behavior.
 - The `live == oracle` differential check is itself an impressive engineering point judges rarely see.
 
 ## Token-Safe Development Mode (build BEFORE any swarm/eval wiring)
 
 Implement `src/loopie/llm.py` as the **only** path to a model. No node calls `ChatOpenAI` directly.
 
-1. **`LOOPIE_LLM_MODE=mock` is the DEFAULT.** Real calls require explicit `LOOPIE_LLM_MODE=live`.
-   `mock` grades via the `decide.py` oracle + returns canned narration keyed by node+fixture; zero
+1. **`LOOPIE_LLM_MODE=test` is the DEFAULT.** Real calls require explicit `LOOPIE_LLM_MODE=live`.
+   `test` grades via the `decide.py` oracle + returns canned narration keyed by node+fixture; zero
    network, zero cost. `live` runs the real LLM agents and is asserted equal to the oracle.
 2. **Hard budgets, fail-closed:** `MAX_LLM_CALLS_PER_RUN=8`, `MAX_LLM_CALLS_PER_EVAL=40`,
    `MAX_AGENT_TRANSITIONS=6`. On breach → stop, mark `budget_guard_triggered`, record the partial run.
@@ -99,11 +99,11 @@ Implement `src/loopie/llm.py` as the **only** path to a model. No node calls `Ch
    same inputs reuse the prior completion. Dev iteration costs nothing after the first live pass.
 6. **Cost ledger** — every run writes a `loopie.cost_ledger` row: `model, prompt_tokens,
    completion_tokens, total_tokens, estimated_cost, stop_reason, mode`. Surfaced in the cockpit.
-7. **Dry-run command** — `run_suite(mode="mock")` executes the full pipeline (baseline → propose →
+7. **Dry-run command** — `run_suite(mode="test")` executes the full pipeline (baseline → propose →
    apply → patched → counterfactual) at **zero API cost** for CI and demo rehearsal.
 
 A live API key is used only for (a) one cache-priming pass and (b) the final recorded demo. All
-day-to-day building, evals, and hot-reloads run in `mock`.
+day-to-day building, evals, and hot-reloads run in `test`.
 
 ## Datasets
 
@@ -173,12 +173,12 @@ the demo's "undeniable" moment.
 
 Add deps to `agent/pyproject.toml`: `weave`, `redis>=5`, `psycopg[binary]`. New package `src/loopie/`:
 
-- **`llm.py`** — the ONLY model gateway. Honors `LOOPIE_LLM_MODE` (default `mock`), enforces the
+- **`llm.py`** — the ONLY model gateway. Honors `LOOPIE_LLM_MODE` (default `test`), enforces the
   per-run/per-eval call budgets, `temperature=0`+seed in live mode, and records `cost_ledger` rows.
   Nodes import from here; none call `ChatOpenAI` directly.
 - **`stores/llm_cache.py`** — replay cache keyed by `model+node+fixture_id+artifact_version`.
 - **`decide.py`** — the **deterministic golden oracle**: pure functions mapping (ticket, retrieved
-  artifacts) → expected graded `action`. Used by mock mode + CI; `live` LLM-agent output is asserted
+  artifacts) → expected graded `action`. Used by test mode + CI; `live` LLM-agent output is asserted
   equal to it on canonical cases (differential test). It is a reference, not a replacement for agents.
 - **`state.py`** — `LoopieState` TypedDict: `ticket`, `retrieved_memory`, `routing_decision`,
   `tool_calls[]`, `transitions`, `action`, `narration`, `trace[]` (the causality chain).
@@ -223,7 +223,7 @@ Components: `Cockpit`, `EventStream`, `FailureCard`, `CausalityChain`, `Correcti
 
 ## Build order (cut line preserved)
 
-0. **`llm.py` gateway in `mock` mode + budgets + cost ledger + deterministic `decide.py`**
+0. **`llm.py` gateway in `test` mode + budgets + cost ledger + deterministic `decide.py`**
 1. Fixtures + seeds (`data/`); lock the dataset.
 2. `loopie_swarm` StateGraph + Redis live substrate; baseline run fails `security_001`.
 3. Weave ops on nodes + deterministic scorers + baseline `Evaluation`.
@@ -246,7 +246,7 @@ same eval rerun, deterministic score improvement.
 
 ## Environment / setup
 
-- **`LOOPIE_LLM_MODE=mock` by default** in all `.env` files; only the recording session sets `live`.
+- **`LOOPIE_LLM_MODE=test` by default** in all `.env` files; only the recording session sets `live`.
 - Set `OPENAI_API_KEY` in `loopie-copilotkit/.env` (only needed for `live`).
 - Root `.env`: `WANDB_API_KEY`, `WANDB_ENTITY`, `WEAVE_PROJECT=loopie`.
 - Redis: reuse running container, `loopie:` prefix + logical DB 1.
@@ -260,8 +260,8 @@ creates `loopie` schema; scorer unit tests pass.
 
 Token-safety acceptance:
 
-- `run_suite(mode="mock")` completes with **0 network calls / $0**.
-- mock vs live produce the **same graded actions** on canonical cases.
+- `run_suite(mode="test")` completes with **0 network calls / $0**.
+- test vs live produce the **same graded actions** on canonical cases.
 - Tripping `MAX_AGENT_TRANSITIONS` marks `budget_guard_triggered` and stops.
 - Replay cache hit makes 0 new live calls.
 

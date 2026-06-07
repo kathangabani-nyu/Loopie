@@ -27,8 +27,8 @@ def _provider_mode() -> str:
     settings = get_settings()
     registry = provider_registry()
     enabled = [name for name, cfg in registry.items() if cfg.enabled]
-    if settings.is_mock:
-        return "mock"
+    if settings.is_test:
+        return "test"
     if enabled:
         return f"live:{','.join(enabled)}"
     return "live:unconfigured"

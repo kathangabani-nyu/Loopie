@@ -11,7 +11,7 @@ services:
       - key: LOOPIE_HOSTED
         value: "1"
       - key: LOOPIE_LLM_MODE
-        value: mock
+        value: test
       - key: LOOPIE_WEAVE_ENABLED
         value: "true"
       - key: LOOPIE_FULL_AGENTIC
@@ -43,7 +43,7 @@ services:
       - key: LOOPIE_HOSTED
         value: "1"
       - key: LOOPIE_LLM_MODE
-        value: mock
+        value: test
       - key: LOOPIE_OPENAI_MODEL
         value: gpt-5.5
       - key: LOOPIE_MAX_CHAT_COST_USD

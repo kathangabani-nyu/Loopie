@@ -99,17 +99,28 @@ function ScorecardStage({
   phase: Phase;
   noRegression: boolean | null;
 }) {
+  const patchComplete = phase === "patched" || phase === "counterfactual";
+  const patchStaged = phase === "proposal" || phase === "approved";
+  const replayComplete = phase === "counterfactual";
   const steps = [
-    { id: "baseline", label: "Baseline: failed", active: phase === "baseline" },
+    {
+      id: "baseline",
+      label: phase === "idle" ? "Baseline: pending" : "Baseline: failed",
+      active: phase === "baseline",
+    },
     {
       id: "patched",
-      label: "Patch: recovered",
-      active: phase === "proposal" || phase === "approved" || phase === "patched",
+      label: patchComplete ? "Patch: recovered" : patchStaged ? "Patch: staged" : "Patch: pending",
+      active: phase === "patched",
     },
     {
       id: "replay",
-      label: noRegression === false ? "Replay: regression" : "Replay: no regressions",
-      active: phase === "counterfactual",
+      label: replayComplete
+        ? noRegression === false
+          ? "Replay: regression"
+          : "Replay: no regressions"
+        : "Replay: pending",
+      active: replayComplete,
     },
   ];
 

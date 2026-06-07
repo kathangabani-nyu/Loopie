@@ -13,7 +13,7 @@ load_dotenv()
 def main() -> None:
     parser = argparse.ArgumentParser(description="Loopie eval pipeline")
     parser.add_argument("command", choices=["run_suite", "seed", "baseline"])
-    parser.add_argument("--mode", default="mock", choices=["mock", "live"])
+    parser.add_argument("--mode", default="test", choices=["test", "live"])
     parser.add_argument("--case-id", default="security_001")
     reset_group = parser.add_mutually_exclusive_group()
     reset_group.add_argument(

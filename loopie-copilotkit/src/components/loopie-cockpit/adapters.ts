@@ -1,4 +1,4 @@
-import { CATEGORY_TITLES, HERO_CASE_ID, PHASES, SCORE_ORDER, SWARM_AGENTS, VERDICT } from "./constants";
+import { CATEGORY_TITLES, HERO_CASE_ID, normalizeProviderMode, PHASES, SCORE_ORDER, SWARM_AGENTS, VERDICT } from "./constants";
 import type {
   ArtifactVersion,
   BudgetView,
@@ -19,13 +19,30 @@ import type {
 } from "./types";
 
 type RawCorrection = NonNullable<LoopieState["proposedCorrections"]>[number];
+type RunEntry = NonNullable<LoopieState["runs"]>[string];
+
+function runEntries(state: LoopieState): RunEntry[] {
+  return Object.values(state.runs || {});
+}
+
+function findLatestRunEntry(state: LoopieState, label: "baseline" | "patched"): RunEntry | undefined {
+  return [...runEntries(state)].reverse().find((r) => r.label === label);
+}
+
+function scoresFailed(scores?: Record<string, boolean>): boolean {
+  return Boolean(scores && Object.values(scores).some((pass) => !pass));
+}
 
 function hasBaselineRun(state: LoopieState): boolean {
-  return Object.values(state.runs || {}).some((r) => r.label === "baseline");
+  return runEntries(state).some((r) => r.label === "baseline");
 }
 
 function hasPatchedRun(state: LoopieState): boolean {
-  return Object.values(state.runs || {}).some((r) => r.label === "patched");
+  return runEntries(state).some((r) => r.label === "patched");
+}
+
+function hasFailedBaselineRun(state: LoopieState): boolean {
+  return Boolean(state.currentFailure?.case_id) || scoresFailed(findLatestRunEntry(state, "baseline")?.scores);
 }
 
 export function derivePhase(state: LoopieState): Phase {
@@ -37,7 +54,7 @@ export function derivePhase(state: LoopieState): Phase {
   if (state.proposedCorrections?.length && state.approvalState === "pending") {
     return "proposal";
   }
-  if (state.currentFailure || hasBaselineRun(state)) return "baseline";
+  if (hasFailedBaselineRun(state)) return "baseline";
   return "idle";
 }
 
@@ -77,6 +94,28 @@ function expectedActionForCategory(category: string | undefined): string | undef
   if (category === "looping_plan") return "escalate_after_loop";
   if (category === "vat_reclassification") return "escalate_billing_review";
   return undefined;
+}
+
+function inferFailureCategory(caseId: string | undefined, scores?: Record<string, boolean>, run?: RunReceipt): string {
+  if (scores?.memory_version_correct === false) return "stale_memory";
+  if (scores?.loop_count_under_limit === false) return "looping_plan";
+  if (scores?.required_policy_checked === false || scores?.unauthorized_tool_call === false) {
+    return "missing_guard";
+  }
+  if ((caseId || "").includes("security") || (run?.action || "").includes("refund")) return "missing_guard";
+  return "unknown_failure";
+}
+
+function failedBaselineAsFailure(state: LoopieState): NonNullable<LoopieState["currentFailure"]> | null {
+  const baseline = findLatestRunEntry(state, "baseline");
+  if (!baseline?.case_id || !scoresFailed(baseline.scores)) return null;
+  const category = inferFailureCategory(baseline.case_id, baseline.scores, baseline.run);
+  return {
+    case_id: baseline.case_id,
+    category,
+    scores: baseline.scores,
+    run: baseline.run,
+  };
 }
 
 function exactErrorForFailure(failure: LoopieState["currentFailure"]): string {
@@ -142,11 +181,12 @@ function correctionDecisionBasis(raw: RawCorrection): string {
 }
 
 function getRunForTrace(state: LoopieState, phase: Phase): RunReceipt | undefined {
-  const patched = Object.values(state.runs || {}).find((r) => r.label === "patched");
+  const patched = findLatestRunEntry(state, "patched");
+  const baseline = findLatestRunEntry(state, "baseline");
   if (phase === "patched" || phase === "counterfactual") {
-    return patched?.run || state.currentFailure?.run;
+    return patched?.run || state.currentFailure?.run || baseline?.run;
   }
-  return state.currentFailure?.run;
+  return state.currentFailure?.run || baseline?.run;
 }
 
 function inferTraceStatus(
@@ -237,14 +277,16 @@ export function buildSwarmView(state: LoopieState, phase: Phase, running: boolea
   const budget = buildBudgetView(state);
   return {
     agents,
-    providerMode: state.preflight?.provider_mode || state.preflight?.llm_mode || "mock",
+    providerMode: normalizeProviderMode(
+      state.preflight?.provider_mode || state.preflight?.llm_mode || "test",
+    ),
     budgetUsd: budget.estimated_run_cost_usd,
     agentCount: Object.keys(SWARM_AGENTS).length,
   };
 }
 
 export function buildFailureView(state: LoopieState): FailureView | null {
-  const failure = state.currentFailure;
+  const failure = state.currentFailure?.case_id ? state.currentFailure : failedBaselineAsFailure(state);
   if (!failure?.case_id) return null;
 
   const run = failure.run;
@@ -531,20 +573,20 @@ function findRunScores(
   state: LoopieState,
   label: "baseline" | "patched",
 ): Record<string, boolean> | undefined {
-  return Object.values(state.runs || {}).find((r) => r.label === label)?.scores;
+  return findLatestRunEntry(state, label)?.scores;
 }
 
 function heroCaseId(state: LoopieState): string {
   return (
     state.evalDelta?.case_id ||
     state.currentFailure?.case_id ||
-    Object.values(state.runs || {}).find((r) => r.label === "baseline")?.case_id ||
+    findLatestRunEntry(state, "baseline")?.case_id ||
     HERO_CASE_ID
   );
 }
 
 function baselineScores(state: LoopieState): Record<string, boolean> | undefined {
-  return state.evalDelta?.baseline_passed || state.currentFailure?.scores || findRunScores(state, "baseline");
+  return state.currentFailure?.scores || findRunScores(state, "baseline") || state.evalDelta?.baseline_passed;
 }
 
 function patchedScores(state: LoopieState): Record<string, boolean> | undefined {
@@ -660,6 +702,8 @@ export function buildVerdictView(state: LoopieState, phase: Phase): VerdictView 
 }
 
 export function buildScorecard(state: LoopieState, phase: Phase): ScorecardView | null {
+  if (phase === "idle") return null;
+
   const base = baselineScores(state);
   const patched = patchedScores(state);
   const activeHeroScores = phase === "patched" || phase === "counterfactual" ? patched || base : base;

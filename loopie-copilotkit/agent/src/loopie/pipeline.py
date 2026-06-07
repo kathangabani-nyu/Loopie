@@ -334,16 +334,19 @@ class LoopiePipeline:
 
         return {
             "ledger_total_cost": self.ledger.total_cost(),
-            "mock_total_cost": self.ledger.total_cost(mode="mock"),
+            "test_total_cost": self.ledger.total_cost(mode="test"),
             "chat_cost_usd": self.ledger.total_cost(mode="chat"),
             "max_chat_cost_usd": float(os.getenv("LOOPIE_MAX_CHAT_COST_USD", "40")),
             "cost_by_provider": self.ledger.cost_by_provider(),
             "pipeline_budget": self.state.get("budget", {}),
         }
 
-    def run_suite(self, *, mode: str = "mock", reset: bool | None = None) -> dict[str, Any]:
+    def run_suite(self, *, mode: str = "test", reset: bool | None = None) -> dict[str, Any]:
         import os
 
+        from src.loopie.config import normalize_llm_mode
+
+        mode = normalize_llm_mode(mode)
         os.environ["LOOPIE_LLM_MODE"] = mode
         if mode == "live":
             os.environ.setdefault("LOOPIE_LIVE_CONFIRMED", "1")

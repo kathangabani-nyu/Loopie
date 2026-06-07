@@ -7,6 +7,17 @@ export const COPY = {
   chatModel: "gpt-5.5",
 } as const;
 
+/** Map legacy mock + empty values to the canonical test mode label. */
+export function normalizeProviderMode(mode?: string | null): string {
+  if (!mode || mode === "mock") return "test";
+  return mode;
+}
+
+export function providerModeLabel(mode?: string | null): string {
+  const normalized = normalizeProviderMode(mode);
+  return normalized === "live" ? "live" : "test · $0";
+}
+
 export const VERDICT = {
   idle: { label: "Standby", sub: "Awaiting baseline run" },
   baseline: { label: "Baseline Failing", sub: "Deterministic checks failing on the primary case" },

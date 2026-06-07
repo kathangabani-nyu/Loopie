@@ -21,7 +21,7 @@ def agentic_diagnosis(failure: dict[str, Any]) -> dict[str, Any]:
 
     correction = propose(category, case_id=case_id)
 
-    if not settings.full_agentic or settings.is_mock:
+    if not settings.full_agentic or settings.is_test:
         return {
             **correction,
             "diagnosis_mode": "deterministic",

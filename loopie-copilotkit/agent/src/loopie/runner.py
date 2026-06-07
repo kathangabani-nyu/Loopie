@@ -1,4 +1,4 @@
-"""Run a single ticket through the worker swarm (mock or live)."""
+"""Run a single ticket through the worker swarm (test or live)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.loopie.artifacts import artifact_content_hash
-from src.loopie.config import get_settings
+from src.loopie.config import get_settings, normalize_llm_mode
 from src.loopie.decide import LIVE_DECISION_CASES, decide_action, decide_tool_calls
 from src.loopie.observability import ensure_weave, op
 from src.loopie.reliability.budget import BudgetTracker
@@ -59,6 +59,7 @@ def _execute_run(
     eval_scope: bool = False,
 ) -> dict[str, Any]:
     settings = get_settings()
+    mode = normalize_llm_mode(mode or settings.llm_mode)
     budget = budget or BudgetTracker()
     artifacts = redis.get_live_artifacts()
 
@@ -111,10 +112,10 @@ def _execute_run(
         "wall_clock_ms": wall_clock_ms,
         "swarm_nodes": swarm_nodes,
         "execution_engine": final_state.get("execution_engine", "langgraph_swarm"),
-        "mode": mode or settings.llm_mode,
+        "mode": mode,
         "decided_by": final_state.get("decided_by", "oracle"),
         "fallback_used": bool(final_state.get("fallback_used", False)),
-        "stop_reason": final_state.get("stop_reason", "mock"),
+        "stop_reason": final_state.get("stop_reason", "test"),
         "decision_schema_version": final_state.get("decision_schema_version"),
         "prompt_version": final_state.get("prompt_version"),
         "cache_hit": bool(final_state.get("cache_hit", False)),

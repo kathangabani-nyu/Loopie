@@ -28,6 +28,18 @@ def _env_float(name: str, default: float) -> float:
     return float(raw)
 
 
+LLM_MODE_TEST = "test"
+LLM_MODE_LIVE = "live"
+
+
+def normalize_llm_mode(raw: str | None) -> str:
+    """Canonical pipeline mode: test (deterministic oracle) or live."""
+    mode = (raw or LLM_MODE_TEST).strip().lower()
+    if mode == "mock":
+        return LLM_MODE_TEST
+    return mode
+
+
 @dataclass(frozen=True)
 class LoopieSettings:
     llm_mode: str
@@ -49,8 +61,8 @@ class LoopieSettings:
     openai_model: str
 
     @property
-    def is_mock(self) -> bool:
-        return self.llm_mode != "live"
+    def is_test(self) -> bool:
+        return self.llm_mode != LLM_MODE_LIVE
 
     @property
     def requires_durable_stores(self) -> bool:
@@ -60,7 +72,7 @@ class LoopieSettings:
 @lru_cache(maxsize=1)
 def get_settings() -> LoopieSettings:
     return LoopieSettings(
-        llm_mode=os.getenv("LOOPIE_LLM_MODE", "mock").strip().lower(),
+        llm_mode=normalize_llm_mode(os.getenv("LOOPIE_LLM_MODE")),
         require_live_confirmation=_env_bool("LOOPIE_REQUIRE_LIVE_LLM_CONFIRMATION", True),
         llm_seed=_env_int("LOOPIE_LLM_SEED", 42),
         max_llm_calls_per_run=_env_int("LOOPIE_MAX_LLM_CALLS_PER_RUN", 8),

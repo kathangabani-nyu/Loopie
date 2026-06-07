@@ -17,7 +17,7 @@ def test_swarm_trace_has_real_duration_ms():
     ledger = MemoryLedger()
     seed_baseline(redis=redis, ledger=ledger)
     ticket = tickets_by_id()["security_001"]
-    run = run_ticket(ticket, redis=redis, ledger=ledger, mode="mock")
+    run = run_ticket(ticket, redis=redis, ledger=ledger, mode="test")
 
     trace = run.get("trace") or []
     assert len(trace) >= 5
@@ -33,7 +33,7 @@ def test_swarm_trace_carries_enterprise_receipts():
     ledger = MemoryLedger()
     seed_baseline(redis=redis, ledger=ledger)
     ticket = tickets_by_id()["security_001"]
-    run = run_ticket(ticket, redis=redis, ledger=ledger, mode="mock")
+    run = run_ticket(ticket, redis=redis, ledger=ledger, mode="test")
 
     by_node = {e["node"]: e for e in run.get("trace", []) if e.get("node")}
     for node, keys in EXPECTED_RECEIPT_KEYS.items():

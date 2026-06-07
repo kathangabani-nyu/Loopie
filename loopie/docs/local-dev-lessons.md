@@ -40,7 +40,7 @@ Brief postmortem from the first local run of `loopie-copilotkit/`. Use this to a
 | Problem | What happened | Avoid |
 |---|---|---|
 | Unicode log noise | `UnicodeEncodeError` on `→` and `⚠️` in agent logs (cp1252 console) | Set `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8` in `run-agent.bat` / shell profile |
-| EOL warning | `langgraph-api 0.7.101` end-of-life warnings | Plan upgrade; not blocking for local mock demo |
+| EOL warning | `langgraph-api 0.7.101` end-of-life warnings | Plan upgrade; not blocking for local test demo |
 | Slow graph import | ~8s startup on first load | Normal for dev; don’t treat as failure |
 
 ---
@@ -59,7 +59,7 @@ Brief postmortem from the first local run of `loopie-copilotkit/`. Use this to a
 ## 6. Infrastructure that *did* work
 
 - `docker compose up` (Redis + Postgres + CopilotKit Intelligence) when `COPILOTKIT_LICENSE_TOKEN` is set
-- Mock LLM mode (`LOOPIE_LLM_MODE=mock`) — no OpenAI key required for the reliability demo path
+- Test LLM mode (`LOOPIE_LLM_MODE=test`) — no OpenAI key required for the reliability demo path
 - API layer itself was fine once reachable; issues were tooling, layout, and missing second process
 
 ---

@@ -52,7 +52,7 @@ def _has_security_guard(artifacts: dict[str, Any] | None) -> bool:
     return any(r.get("rule") == _SECURITY_GUARD_RULE for r in rules)
 
 
-def mock_narration(
+def test_narration(
     node: str,
     ticket: dict[str, Any] | None = None,
     artifacts: dict[str, Any] | None = None,
@@ -221,17 +221,17 @@ class LLMGateway:
         ticket: dict[str, Any] | None = None,
         artifacts: dict[str, Any] | None = None,
     ) -> LLMResult:
-        if self.settings.is_mock:
-            text = mock_narration(node, ticket, artifacts)
+        if self.settings.is_test:
+            text = test_narration(node, ticket, artifacts)
             result = LLMResult(
                 text=text,
-                mode="mock",
+                mode="test",
                 model="oracle",
                 prompt_tokens=0,
                 completion_tokens=0,
                 total_tokens=0,
                 estimated_cost_usd=0.0,
-                stop_reason="mock",
+                stop_reason="test",
             )
             self._record(result, run_id=fixture_id)
             return result
@@ -255,21 +255,21 @@ class LLMGateway:
     ) -> LLMDecisionResult:
         oracle_action = decide_action(ticket, artifacts)
 
-        if self.settings.is_mock:
+        if self.settings.is_test:
             return LLMDecisionResult(
                 action=oracle_action,
-                mode="mock",
+                mode="test",
                 model="oracle",
                 decided_by="oracle",
                 fallback_used=False,
                 security_guard_observed=_has_security_guard(artifacts),
                 artifact_basis=self._default_artifact_basis(artifacts),
-                reason="mock mode delegates to deterministic oracle",
+                reason="test mode delegates to deterministic oracle",
                 prompt_tokens=0,
                 completion_tokens=0,
                 total_tokens=0,
                 estimated_cost_usd=0.0,
-                stop_reason="mock",
+                stop_reason="test",
             )
 
         return self._live_decision(

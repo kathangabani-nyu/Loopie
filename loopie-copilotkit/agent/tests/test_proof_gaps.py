@@ -73,8 +73,8 @@ class MemoryRedis(RedisStore):
 
 
 @pytest.fixture(autouse=True)
-def mock_mode(monkeypatch):
-    monkeypatch.setenv("LOOPIE_LLM_MODE", "mock")
+def test_mode(monkeypatch):
+    monkeypatch.setenv("LOOPIE_LLM_MODE", "test")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -129,7 +129,7 @@ def test_cache_key_busts_on_artifact_hash_change():
 
 
 def test_weave_eval_error_is_surfaced_not_silent(monkeypatch):
-    monkeypatch.setenv("LOOPIE_LLM_MODE", "mock")
+    monkeypatch.setenv("LOOPIE_LLM_MODE", "test")
     monkeypatch.setenv("LOOPIE_WEAVE_ENABLED", "true")
     monkeypatch.setenv("WANDB_API_KEY", "test-key")
     get_settings.cache_clear()
@@ -143,15 +143,15 @@ def test_weave_eval_error_is_surfaced_not_silent(monkeypatch):
 
     monkeypatch.setattr("src.loopie.reliability.evals.asyncio.run", _boom)
 
-    result = evaluate_suite(label="baseline", redis=redis, ledger=ledger, limit=3, mode="mock")
+    result = evaluate_suite(label="baseline", redis=redis, ledger=ledger, limit=3, mode="test")
     assert result["weave_eval_error"] is not None
     assert "weave evaluation unavailable" in result["weave_eval_error"]
     assert result["weave_eval_id"] is None
     assert result["results"] == []
 
 
-def test_weave_tracing_enabled_in_mock_mode(monkeypatch):
-    monkeypatch.setenv("LOOPIE_LLM_MODE", "mock")
+def test_weave_tracing_enabled_in_test_mode(monkeypatch):
+    monkeypatch.setenv("LOOPIE_LLM_MODE", "test")
     monkeypatch.setenv("LOOPIE_WEAVE_ENABLED", "true")
     monkeypatch.setenv("WANDB_API_KEY", "test-key")
     get_settings.cache_clear()
@@ -162,7 +162,7 @@ def test_weave_tracing_enabled_in_mock_mode(monkeypatch):
 
 
 def test_weave_tracing_requires_explicit_flag(monkeypatch):
-    monkeypatch.setenv("LOOPIE_LLM_MODE", "mock")
+    monkeypatch.setenv("LOOPIE_LLM_MODE", "test")
     monkeypatch.delenv("LOOPIE_WEAVE_ENABLED", raising=False)
     monkeypatch.setenv("WANDB_API_KEY", "test-key")
     get_settings.cache_clear()
@@ -183,7 +183,7 @@ def test_run_suite_live_fails_when_whitelist_case_used_fallback(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     get_settings.cache_clear()
 
-    def _mock_narrate(self, *, node, fixture_id, artifact_version, ticket=None, artifacts=None):
+    def _stub_narrate(self, *, node, fixture_id, artifact_version, ticket=None, artifacts=None):
         return LLMResult(
             text=f"live {node}",
             mode="live",
@@ -192,10 +192,10 @@ def test_run_suite_live_fails_when_whitelist_case_used_fallback(monkeypatch):
             completion_tokens=0,
             total_tokens=0,
             estimated_cost_usd=0.0,
-            stop_reason="mock",
+            stop_reason="test",
         )
 
-    monkeypatch.setattr(LLMGateway, "narrate", _mock_narrate)
+    monkeypatch.setattr(LLMGateway, "narrate", _stub_narrate)
 
     def _skip_eval(**_kwargs):
         return {

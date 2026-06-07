@@ -8,8 +8,8 @@ from memory_stores import MemoryLedger, MemoryRedis
 
 
 @pytest.fixture(autouse=True)
-def mock_mode(monkeypatch):
-    monkeypatch.setenv("LOOPIE_LLM_MODE", "mock")
+def test_mode(monkeypatch):
+    monkeypatch.setenv("LOOPIE_LLM_MODE", "test")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
