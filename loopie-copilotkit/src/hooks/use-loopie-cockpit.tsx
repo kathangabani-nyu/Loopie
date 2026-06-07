@@ -7,7 +7,7 @@ import { CorrectionPanel } from "@/components/loopie-cockpit/panels";
 import { buildCorrectionView } from "@/components/loopie-cockpit/adapters";
 import type { LoopieState } from "@/components/loopie-cockpit/types";
 
-import { useAgent, useHumanInTheLoop } from "@copilotkit/react-core/v2";
+import { useAgent, useFrontendTool, useHumanInTheLoop } from "@copilotkit/react-core/v2";
 
 type UseLoopieCockpitOptions = {
   /** When true, REST polling is disabled and agent.state is the source of truth. */
@@ -134,16 +134,66 @@ export function useLoopieCockpit(options: UseLoopieCockpitOptions = {}) {
           body = { correction_id: correctionId };
         }
         await postLoopie(action, body);
-        if (!useAgentState || !hasAgentState) {
-          await refresh();
-        }
+        await refresh();
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "Action failed");
         throw err;
       }
     },
-    [refresh, state.proposedCorrections, useAgentState, hasAgentState],
+    [refresh, state.proposedCorrections],
   );
+
+  const cockpitTool = useCallback(
+    async (action: string, body: Record<string, unknown> = {}) => {
+      await runAction(action, body);
+      return { ok: true, action };
+    },
+    [runAction],
+  );
+
+  useFrontendTool({
+    name: "runBaseline",
+    description: "Run the deterministic baseline eval on the primary case.",
+    parameters: z.object({ case_id: z.string().optional() }),
+    handler: async ({ case_id }) => cockpitTool("baseline", { case_id: case_id || "security_001" }),
+  });
+
+  useFrontendTool({
+    name: "proposeCorrection",
+    description: "Propose a structured correction for the current failure.",
+    parameters: z.object({}),
+    handler: async () => cockpitTool("propose"),
+  });
+
+  useFrontendTool({
+    name: "approveCorrection",
+    description: "Approve the pending Loopie correction.",
+    parameters: z.object({ correction_id: z.string().optional() }),
+    handler: async ({ correction_id }) =>
+      cockpitTool("approve", { correction_id: correction_id || state.proposedCorrections?.[0]?.id }),
+  });
+
+  useFrontendTool({
+    name: "rerunCompare",
+    description: "Rerun the patched eval and compare scores.",
+    parameters: z.object({ case_id: z.string().optional() }),
+    handler: async ({ case_id }) => cockpitTool("patched", { case_id: case_id || "security_001" }),
+  });
+
+  useFrontendTool({
+    name: "counterfactualReplay",
+    description: "Run counterfactual replay to verify no regression.",
+    parameters: z.object({ hero_case_id: z.string().optional() }),
+    handler: async ({ hero_case_id }) =>
+      cockpitTool("counterfactual", { hero_case_id: hero_case_id || "security_001" }),
+  });
+
+  useFrontendTool({
+    name: "resetLoopieDemo",
+    description: "Reset the Loopie demo to a clean seeded state.",
+    parameters: z.object({}),
+    handler: async () => cockpitTool("reset"),
+  });
 
   return {
     state,

@@ -1037,6 +1037,81 @@
   }
 }
 
+.loopie-cockpit-root .panel-sub {
+  font-weight: 400;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--tx-dim);
+}
+
+.loopie-cockpit-root .treceipt {
+  margin-top: 8px;
+  font-size: 11px;
+}
+.loopie-cockpit-root .treceipt summary {
+  cursor: pointer;
+  color: var(--tx-dim);
+  margin-bottom: 4px;
+}
+
+.loopie-cockpit-root .swarmTelemetry {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.loopie-cockpit-root .swarmHead {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tx-dim);
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.loopie-cockpit-root .swarmRow {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  gap: 10px;
+  align-items: start;
+}
+.loopie-cockpit-root .swarmDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 99px;
+  margin-top: 5px;
+}
+.loopie-cockpit-root .swarmLabel {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.loopie-cockpit-root .swarmRole {
+  font-size: 11px;
+  color: var(--tx-dim);
+}
+.loopie-cockpit-root .swarmReceipt {
+  font-size: 10px;
+  margin-top: 4px;
+  line-height: 1.45;
+}
+.loopie-cockpit-root .swarmStatus {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+.loopie-cockpit-root .swarmStatus.fail,
+.loopie-cockpit-root .swarmStatus.root {
+  color: var(--fail);
+}
+.loopie-cockpit-root .swarmStatus.warn {
+  color: var(--warn);
+}
+
 .hitl-shell {
   border: 1px solid rgba(127, 230, 216, 0.35);
   border-radius: 12px;

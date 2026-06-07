@@ -83,6 +83,7 @@ class MemoryLedger(Ledger):
     def __init__(self) -> None:
         super().__init__(url="postgresql://invalid", _memory_rows=[], _memory_costs=[])
         self._postgres_ok = False
+        self._audit_events: list[dict[str, Any]] = []
 
     def ping(self) -> bool:
         self._postgres_ok = False
@@ -121,5 +122,7 @@ class MemoryLedger(Ledger):
     def artifact_history(self, artifact_key: str) -> list[dict[str, Any]]:
         return [r for r in self._memory_rows if r["artifact_key"] == artifact_key]
 
-    def record_audit(self, event_type: str, payload: dict[str, Any]) -> None:
-        return None
+    def record_audit(self, event_type: str, payload: dict[str, Any]) -> int | None:
+        event_id = len(self._audit_events) + 1
+        self._audit_events.append({"id": event_id, "event_type": event_type, "payload": payload})
+        return event_id

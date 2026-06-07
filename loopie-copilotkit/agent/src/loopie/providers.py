@@ -27,6 +27,10 @@ def write_cursor_smoke_marker() -> Path:
     return CURSOR_SMOKE_MARKER
 
 
+def is_gpt5_model(model: str) -> bool:
+    return model.lower().startswith("gpt-5")
+
+
 @dataclass(frozen=True)
 class ProviderConfig:
     name: str
@@ -87,9 +91,10 @@ def resolve_provider(role: str, registry: dict[str, ProviderConfig] | None = Non
 def openai_client_kwargs(cfg: ProviderConfig) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "model": cfg.model,
-        "temperature": 0,
         "api_key": cfg.api_key,
     }
+    if not is_gpt5_model(cfg.model):
+        kwargs["temperature"] = 0
     if cfg.base_url:
         kwargs["base_url"] = cfg.base_url
     return kwargs

@@ -399,6 +399,7 @@
   grid-template-areas:
     "scorecard scorecard"
     "stream stream"
+    "swarm swarm"
     "case correction"
     "trace correction"
     "delta budget"
@@ -430,6 +431,9 @@
 }
 .loopie-cockpit-root .r-budget {
   grid-area: budget;
+}
+.loopie-cockpit-root .r-swarm {
+  grid-area: swarm;
 }
 .loopie-cockpit-root .region {
   min-height: 0;
@@ -485,7 +489,7 @@
     grid-template-rows: auto minmax(0, 0.9fr) minmax(0, 0.78fr) minmax(0, 0.62fr);
     grid-template-areas:
       "scorecard scorecard scorecard"
-      "stream case correction"
+      "stream swarm correction"
       "stream trace correction"
       "delta timemachine budget";
   }
@@ -503,6 +507,7 @@
     grid-template-areas:
       "scorecard"
       "stream"
+      "swarm"
       "case"
       "trace"
       "correction"

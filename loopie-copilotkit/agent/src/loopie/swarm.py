@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+import functools
+import time
+from typing import Any, Callable
 
 from langgraph.graph import END, START, StateGraph
 
@@ -11,11 +13,12 @@ from src.loopie.decide import decide_action, decide_tool_calls, uses_live_decisi
 from src.loopie.llm import DECISION_PROMPT_VERSION, DECISION_SCHEMA_VERSION, LLMGateway
 from src.loopie.run_context import get_run_context
 from src.loopie.state import LoopieState
-from src.loopie.tools import execute_tool
+from src.loopie.tools import policy_version_read, run_evidence_tools, execute_tool
 
 from src.loopie.observability import op as _op
 
 SWARM_NODE_ORDER = ("triage", "memory_lookup", "policy_check", "resolution", "evaluator")
+_SECURITY_GUARD = "security_flag_blocks_refund"
 
 
 def _append_trace(state: LoopieState, entry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -30,7 +33,27 @@ def _maybe_stop_for_budget(state: LoopieState) -> bool:
     return ctx.budget.budget_guard_triggered
 
 
+def _timed(fn: Callable[..., dict[str, Any]]) -> Callable[..., dict[str, Any]]:
+    @functools.wraps(fn)
+    def wrapper(state: LoopieState) -> dict[str, Any]:
+        start = time.perf_counter()
+        result = fn(state)
+        elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+        if "trace" in result and result["trace"]:
+            trace = list(result["trace"])
+            trace[-1] = {**trace[-1], "duration_ms": elapsed_ms}
+            result = {**result, "trace": trace}
+        return result
+
+    return wrapper
+
+
+def _has_guard(artifacts: dict[str, Any]) -> bool:
+    return any(r.get("rule") == _SECURITY_GUARD for r in (artifacts.get("routing_rules") or []))
+
+
 @_op("triage")
+@_timed
 def triage_node(state: LoopieState) -> dict[str, Any]:
     if _maybe_stop_for_budget(state):
         return {"budget_guard_triggered": True, "transitions": get_run_context().budget.transitions}
@@ -47,6 +70,13 @@ def triage_node(state: LoopieState) -> dict[str, Any]:
     )
     narration = dict(state.get("narration", {}))
     narration["triage"] = result.text
+    amount = ticket.get("amount")
+    receipt = {
+        "classification": "security_flagged_refund" if ticket.get("security_flag") else "standard_refund",
+        "security_flag": bool(ticket.get("security_flag")),
+        "amount": amount,
+        "tier": ticket.get("customer_tier", "standard"),
+    }
     return {
         "narration": narration,
         "trace": _append_trace(
@@ -56,6 +86,7 @@ def triage_node(state: LoopieState) -> dict[str, Any]:
                 "narration": result.text,
                 "mode": result.mode,
                 "from_cache": result.from_cache,
+                "receipt": receipt,
             },
         ),
         "transitions": ctx.budget.transitions,
@@ -63,6 +94,7 @@ def triage_node(state: LoopieState) -> dict[str, Any]:
 
 
 @_op("memory_lookup")
+@_timed
 def memory_lookup_node(state: LoopieState) -> dict[str, Any]:
     if state.get("budget_guard_triggered") or _maybe_stop_for_budget(state):
         return {"budget_guard_triggered": True, "transitions": get_run_context().budget.transitions}
@@ -70,6 +102,7 @@ def memory_lookup_node(state: LoopieState) -> dict[str, Any]:
     ctx = get_run_context()
     ticket = state["ticket"]
     mem = ctx.redis.get_memory("policy:refund_window") or {"value": "", "version": 1}
+    policy_receipt = policy_version_read(ctx.redis)
     gateway = LLMGateway(budget=ctx.budget, ledger=ctx.ledger, eval_scope=ctx.eval_scope)
     result = gateway.narrate(
         node="memory_lookup",
@@ -80,6 +113,11 @@ def memory_lookup_node(state: LoopieState) -> dict[str, Any]:
     )
     narration = dict(state.get("narration", {}))
     narration["memory_lookup"] = result.text
+    receipt = {
+        "policy_version": policy_receipt["policy_version"],
+        "freshness": policy_receipt["freshness"],
+        "artifact_hash": policy_receipt["artifact_hash"],
+    }
     return {
         "retrieved_memory": mem,
         "memory_version": int(mem.get("version", 1)),
@@ -92,6 +130,7 @@ def memory_lookup_node(state: LoopieState) -> dict[str, Any]:
                 "narration": result.text,
                 "mode": result.mode,
                 "from_cache": result.from_cache,
+                "receipt": receipt,
             },
         ),
         "transitions": ctx.budget.transitions,
@@ -99,12 +138,14 @@ def memory_lookup_node(state: LoopieState) -> dict[str, Any]:
 
 
 @_op("policy_check")
+@_timed
 def policy_check_node(state: LoopieState) -> dict[str, Any]:
     if state.get("budget_guard_triggered") or _maybe_stop_for_budget(state):
         return {"budget_guard_triggered": True, "transitions": get_run_context().budget.transitions}
 
     ctx = get_run_context()
     ticket = state["ticket"]
+    artifacts = ctx.artifacts or ctx.redis.get_live_artifacts()
     rules = ctx.redis.get_routing_rules()
     gateway = LLMGateway(budget=ctx.budget, ledger=ctx.ledger, eval_scope=ctx.eval_scope)
     result = gateway.narrate(
@@ -112,10 +153,14 @@ def policy_check_node(state: LoopieState) -> dict[str, Any]:
         fixture_id=ticket["case_id"],
         artifact_version=ctx.artifact_version,
         ticket=ticket,
-        artifacts=ctx.artifacts,
+        artifacts=artifacts,
     )
     narration = dict(state.get("narration", {}))
     narration["policy_check"] = result.text
+    receipt = {
+        "rule_checked": _SECURITY_GUARD,
+        "present": _has_guard({"routing_rules": rules}),
+    }
     return {
         "routing_rules": rules,
         "policy_checked": bool(ticket.get("must_check_policy_version")),
@@ -128,6 +173,7 @@ def policy_check_node(state: LoopieState) -> dict[str, Any]:
                 "narration": result.text,
                 "mode": result.mode,
                 "from_cache": result.from_cache,
+                "receipt": receipt,
             },
         ),
         "transitions": ctx.budget.transitions,
@@ -135,6 +181,7 @@ def policy_check_node(state: LoopieState) -> dict[str, Any]:
 
 
 @_op("resolution")
+@_timed
 def resolution_node(state: LoopieState) -> dict[str, Any]:
     if state.get("budget_guard_triggered") or _maybe_stop_for_budget(state):
         return {"budget_guard_triggered": True, "transitions": get_run_context().budget.transitions}
@@ -171,7 +218,7 @@ def resolution_node(state: LoopieState) -> dict[str, Any]:
         trace = _append_trace(
             state,
             {
-                "node": "decision",
+                "node": "resolution",
                 "action": action,
                 "decided_by": decided_by,
                 "fallback_used": fallback_used,
@@ -201,9 +248,20 @@ def resolution_node(state: LoopieState) -> dict[str, Any]:
             },
         )
 
+    evidence = run_evidence_tools(ticket, artifacts, action, ctx.redis, ctx.ledger)
+    receipt = {
+        "tool_attempt": evidence["tool_attempt"],
+        "policy_result": evidence["policy_result"],
+        "authorization": evidence["authorization"],
+        "action": action,
+        "audit_event_id": evidence.get("audit_event_id"),
+    }
+    trace = list(trace)
+    trace[-1] = {**trace[-1], "receipt": receipt}
+
     tool_calls = decide_tool_calls(action)
     for call in tool_calls:
-        execute_tool(call["name"], {"ticket": ticket, "action": action})
+        execute_tool(call["name"], {"ticket": ticket, "action": action, "artifacts": artifacts})
 
     return {
         "action": action,
@@ -215,27 +273,50 @@ def resolution_node(state: LoopieState) -> dict[str, Any]:
         "cache_hit": cache_hit,
         "narration": narration,
         "trace": trace,
+        "audit_event_id": evidence.get("audit_event_id"),
         "transitions": ctx.budget.transitions,
     }
 
 
 @_op("evaluator")
+@_timed
 def evaluator_node(state: LoopieState) -> dict[str, Any]:
     if state.get("budget_guard_triggered"):
         return {"transitions": get_run_context().budget.transitions}
 
     ctx = get_run_context()
     ticket = state["ticket"]
+    artifacts = ctx.artifacts or ctx.redis.get_live_artifacts()
     gateway = LLMGateway(budget=ctx.budget, ledger=ctx.ledger, eval_scope=ctx.eval_scope)
     result = gateway.narrate(
         node="evaluator",
         fixture_id=ticket["case_id"],
         artifact_version=ctx.artifact_version,
         ticket=ticket,
-        artifacts=ctx.artifacts,
+        artifacts=artifacts,
     )
     narration = dict(state.get("narration", {}))
     narration["evaluator"] = result.text
+
+    from src.loopie.reliability.scorers import score_run
+
+    partial_run = {
+        "action": state.get("action"),
+        "tool_calls": state.get("tool_calls", []),
+        "transitions": ctx.budget.transitions,
+        "policy_checked": bool(state.get("policy_checked", ticket.get("must_check_policy_version"))),
+        "memory_version": int(state.get("memory_version", 1)),
+        "max_transitions": int((artifacts or {}).get("max_transitions", 6)),
+        "decided_by": state.get("decided_by", "oracle"),
+        "fallback_used": bool(state.get("fallback_used", False)),
+    }
+    scores = score_run(partial_run, ticket)
+    receipt = {
+        "scorers_passed": sum(1 for v in scores.values() if v),
+        "scorers_total": len(scores),
+        "audit_event_id": state.get("audit_event_id"),
+    }
+
     return {
         "narration": narration,
         "trace": _append_trace(
@@ -246,6 +327,7 @@ def evaluator_node(state: LoopieState) -> dict[str, Any]:
                 "narration": result.text,
                 "mode": result.mode,
                 "from_cache": result.from_cache,
+                "receipt": receipt,
             },
         ),
         "transitions": ctx.budget.transitions,

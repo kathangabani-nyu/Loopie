@@ -14,7 +14,7 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping /health
+      - name: Ping loopie-api /health
         env:
           RENDER_URL: ${{ vars.RENDER_URL }}
         run: |
@@ -23,4 +23,14 @@ jobs:
             exit 1
           fi
           echo "Pinging $RENDER_URL/health"
-          curl -fsS --max-time 90 "$RENDER_URL/health" && echo "" && echo "warm OK"
+          curl -fsS --max-time 90 "$RENDER_URL/health" && echo "" && echo "api warm OK"
+      - name: Ping loopie-agent /ok
+        env:
+          AGENT_URL: ${{ vars.AGENT_URL }}
+        run: |
+          if [ -z "$AGENT_URL" ]; then
+            echo "Set repo variable AGENT_URL to your LangGraph agent URL, e.g. https://loopie-agent.onrender.com"
+            exit 1
+          fi
+          echo "Pinging $AGENT_URL/ok"
+          curl -fsS --max-time 90 "$AGENT_URL/ok" && echo "" && echo "agent warm OK"

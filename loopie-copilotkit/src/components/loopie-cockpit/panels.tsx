@@ -10,6 +10,7 @@ import { BlastRadius } from "./viz";
 
 export function Panel({
   title,
+  subtitle,
   tag,
   live,
   area,
@@ -17,6 +18,7 @@ export function Panel({
   scroll = true,
 }: {
   title: string;
+  subtitle?: string;
   tag?: string | null;
   live?: boolean;
   area: string;
@@ -39,7 +41,10 @@ export function Panel({
                   : { background: "rgba(255,255,255,.2)", boxShadow: "none" }
               }
             />
-            <span>{title}</span>
+            <span>
+              {title}
+              {subtitle ? <span className="panel-sub mid"> — {subtitle}</span> : null}
+            </span>
             <span className="spacer" />
             {tag ? <span className="tag">{tag}</span> : null}
           </div>

@@ -1,6 +1,7 @@
 """Provider registry + routing unit tests."""
 
-from src.loopie.providers import provider_registry, resolve_provider, role_provider_chain
+from src.loopie.providers import is_gpt5_model, openai_client_kwargs, provider_registry, resolve_provider, role_provider_chain
+from src.loopie.providers import ProviderConfig
 
 
 def test_openai_enabled_when_key_present(monkeypatch):
@@ -21,6 +22,13 @@ def test_cursor_gated_behind_smoke_flag(monkeypatch):
     monkeypatch.setenv("LOOPIE_CURSOR_SMOKE_OK", "1")
     registry = provider_registry()
     assert registry["cursor"].enabled is True
+
+
+def test_gpt5_omits_temperature_and_seed_params():
+    cfg = ProviderConfig(name="openai", base_url=None, api_key="k", model="gpt-5.5", enabled=True)
+    kwargs = openai_client_kwargs(cfg)
+    assert "temperature" not in kwargs
+    assert is_gpt5_model("gpt-5.5-2026-04-23") is True
 
 
 def test_resolve_provider_honors_chain(monkeypatch):

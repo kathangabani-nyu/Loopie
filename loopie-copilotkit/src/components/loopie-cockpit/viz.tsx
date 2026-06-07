@@ -11,7 +11,9 @@ import type {
   EvalDeltaView,
   Phase,
   ScorecardView,
+  SwarmView,
   TraceNode,
+  TraceReceipt,
   VerdictView,
 } from "./types";
 import { CountUp } from "./motion";
@@ -152,7 +154,7 @@ export function Scorecard({ data, phase }: { data: ScorecardView; phase: Phase }
             <div className={`scardCase ${row.isHero ? "hero" : ""}`}>
               <span className="scardCaseId mono">{row.caseId}</span>
               <span className="scardCaseLabel">{row.label}</span>
-              {row.isHero && <span className="scardHeroBadge">HERO</span>}
+              {row.isHero && <span className="scardHeroBadge">PRIMARY</span>}
             </div>
             {row.cells.map((cell) => {
               const stateClass = cell.pass == null ? "neutral" : cell.pass ? "pass" : "fail";
@@ -178,6 +180,22 @@ export function Scorecard({ data, phase }: { data: ScorecardView; phase: Phase }
       </div>
     </div>
   );
+}
+
+function formatReceipt(receipt: TraceReceipt): string {
+  const parts: string[] = [];
+  if (receipt.tool_attempt) parts.push(`attempt: ${String(receipt.tool_attempt)}`);
+  if (receipt.policy_result) parts.push(`policy: ${String(receipt.policy_result)}`);
+  if (receipt.authorization) parts.push(`auth: ${String(receipt.authorization)}`);
+  if (receipt.policy_version != null) parts.push(`policy v${String(receipt.policy_version)}`);
+  if (receipt.artifact_hash) parts.push(`hash: ${String(receipt.artifact_hash).slice(0, 8)}`);
+  if (receipt.freshness) parts.push(`freshness: ${String(receipt.freshness)}`);
+  if (receipt.scorers_passed != null && receipt.scorers_total != null) {
+    parts.push(`scorers: ${String(receipt.scorers_passed)}/${String(receipt.scorers_total)}`);
+  }
+  if (receipt.audit_event_id) parts.push(`audit #${String(receipt.audit_event_id)}`);
+  if (!parts.length) return JSON.stringify(receipt);
+  return parts.join(" · ");
 }
 
 export function CausalityTrace({ trace, runKey }: { trace: TraceNode[]; runKey: string }) {
@@ -263,7 +281,7 @@ export function CausalityTrace({ trace, runKey }: { trace: TraceNode[]; runKey: 
                       </span>
                     )}
                   </span>
-                  <span className="tms mono">{active ? `${n.ms}ms` : ""}</span>
+                  <span className="tms mono">{active && n.ms > 0 ? `${n.ms}ms` : ""}</span>
                 </div>
                 <motion.div
                   className="tdetail"
@@ -272,6 +290,12 @@ export function CausalityTrace({ trace, runKey }: { trace: TraceNode[]; runKey: 
                   transition={{ duration: 0.3, delay: active ? 0.12 : 0 }}
                 >
                   {n.detail}
+                  {n.receipt && Object.keys(n.receipt).length > 0 && (
+                    <details className="treceipt">
+                      <summary className="mono">receipt</summary>
+                      <span className="mono dim">{formatReceipt(n.receipt)}</span>
+                    </details>
+                  )}
                 </motion.div>
               </div>
             </div>
@@ -505,6 +529,71 @@ export function BlastRadius({
   );
 }
 
+export function SwarmRunTelemetry({
+  data,
+  runKey,
+  running,
+}: {
+  data: SwarmView;
+  runKey: string;
+  running?: boolean;
+}) {
+  const reduce = useReducedMotion();
+  const [lit, setLit] = useState(reduce ? data.agents.length : 0);
+
+  useEffect(() => {
+    if (reduce) {
+      setLit(data.agents.length);
+      return;
+    }
+    setLit(0);
+    let i = 0;
+    const iv = setInterval(() => {
+      i += 1;
+      setLit(i);
+      if (i >= data.agents.length) clearInterval(iv);
+    }, 320);
+    return () => clearInterval(iv);
+  }, [runKey, data.agents.length, reduce]);
+
+  return (
+    <div className="swarmTelemetry">
+      <div className="swarmHead mono">
+        <span>
+          {data.agentCount} agents · langgraph · {data.providerMode}
+        </span>
+        <span className="dim">pipeline ${data.budgetUsd.toFixed(3)}</span>
+      </div>
+      {data.agents.map((agent, i) => {
+        const active = i < lit || running;
+        const color = STATUS_COLOR[agent.status] || "var(--teal)";
+        return (
+          <motion.div
+            key={agent.id}
+            className="swarmRow"
+            initial={{ opacity: 0.2 }}
+            animate={{ opacity: active ? 1 : 0.25 }}
+            transition={{ duration: 0.35 }}
+          >
+            <span className="swarmDot" style={{ background: active ? color : "rgba(255,255,255,.12)" }} />
+            <div className="swarmBody">
+              <div className="swarmLabel">
+                <span>{agent.name}</span>
+                {agent.lastMs > 0 && active && <span className="mono dim">{agent.lastMs}ms</span>}
+              </div>
+              <div className="swarmRole mid">{agent.role}</div>
+              {agent.receipt && active && (
+                <div className="swarmReceipt mono dim">{formatReceipt(agent.receipt)}</div>
+              )}
+            </div>
+            <span className={`swarmStatus ${agent.status}`}>{agent.status}</span>
+          </motion.div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function BudgetMeter({ budget }: { budget: BudgetView }) {
   const pct = Math.min(1, budget.estimated_cost_usd / (budget.budget_usd || 1));
 
@@ -528,6 +617,9 @@ export function BudgetMeter({ budget }: { budget: BudgetView }) {
           <CountUp value={budget.estimated_cost_usd} decimals={3} prefix="$" duration={1} />
         </div>
         <div className="bcostlbl mid">of ${budget.budget_usd.toFixed(2)} run budget</div>
+        <div className="bcostlbl mid">
+          chat ${budget.chat_cost_usd.toFixed(3)} / ${budget.max_chat_cost_usd.toFixed(0)}
+        </div>
       </div>
       <div className="btrack">
         <motion.div

@@ -286,16 +286,21 @@ class Ledger:
         except Exception:
             return [r for r in self._memory_rows if r["artifact_key"] == artifact_key]
 
-    def record_audit(self, event_type: str, payload: dict[str, Any]) -> None:
+    def record_audit(self, event_type: str, payload: dict[str, Any]) -> int | None:
         try:
             with self._connect() as conn:
-                conn.execute(
-                    "INSERT INTO loopie.audit_events (event_type, payload) VALUES (%s, %s::jsonb)",
+                row = conn.execute(
+                    """
+                    INSERT INTO loopie.audit_events (event_type, payload)
+                    VALUES (%s, %s::jsonb)
+                    RETURNING id
+                    """,
                     (event_type, json.dumps(payload)),
-                )
+                ).fetchone()
                 conn.commit()
+                return int(row["id"]) if row else None
         except Exception:
-            pass
+            return None
 
     def rollback(self, artifact_key: str, version: int) -> dict[str, Any] | None:
         history = self.artifact_history(artifact_key)

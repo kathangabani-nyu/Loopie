@@ -199,9 +199,13 @@ class LoopiePipeline:
         return self.ledger.artifact_history(key)
 
     def get_budget_status(self) -> dict[str, Any]:
+        import os
+
         return {
             "ledger_total_cost": self.ledger.total_cost(),
             "mock_total_cost": self.ledger.total_cost(mode="mock"),
+            "chat_cost_usd": self.ledger.total_cost(mode="chat"),
+            "max_chat_cost_usd": float(os.getenv("LOOPIE_MAX_CHAT_COST_USD", "40")),
             "cost_by_provider": self.ledger.cost_by_provider(),
             "pipeline_budget": self.state.get("budget", {}),
         }
@@ -325,10 +329,16 @@ class LoopiePipeline:
         }
 
     def export_state(self) -> dict[str, Any]:
+        import os
+
         self.state["events"] = (
             self.redis.xread_recent("evals")
             + self.redis.xread_recent("swarm")
             + self.redis.xread_recent("corrections")
         )
         self.state["preflight"] = run_preflight(redis=self.redis, ledger=self.ledger)
+        budget = dict(self.state.get("budget") or {})
+        budget["chat_cost_usd"] = self.ledger.total_cost(mode="chat")
+        budget["max_chat_cost_usd"] = float(os.getenv("LOOPIE_MAX_CHAT_COST_USD", "40"))
+        self.state["budget"] = budget
         return self.state

@@ -26,3 +26,4 @@ class LoopieState(TypedDict, total=False):
     prompt_version: str
     cache_hit: bool
     execution_engine: str
+    audit_event_id: int | None

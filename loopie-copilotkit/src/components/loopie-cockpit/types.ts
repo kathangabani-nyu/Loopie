@@ -81,12 +81,31 @@ export type StreamEvent = {
   msg: string;
 };
 
+export type TraceReceipt = Record<string, unknown>;
+
 export type TraceNode = {
   id: string;
   label: string;
   status: "ok" | "root" | "warn" | "fail";
   detail: string;
   ms: number;
+  receipt?: TraceReceipt;
+};
+
+export type SwarmAgentView = {
+  id: string;
+  name: string;
+  role: string;
+  lastMs: number;
+  status: TraceNode["status"];
+  receipt?: TraceReceipt;
+};
+
+export type SwarmView = {
+  agents: SwarmAgentView[];
+  providerMode: string;
+  budgetUsd: number;
+  agentCount: number;
 };
 
 export type DiffLine = { t: "add" | "del" | "ctx"; l: string };
@@ -134,6 +153,8 @@ export type ArtifactVersion = {
 export type BudgetView = {
   budget_usd: number;
   estimated_cost_usd: number;
+  chat_cost_usd: number;
+  max_chat_cost_usd: number;
   llm_calls: number;
   transitions: number;
   tokens: number;

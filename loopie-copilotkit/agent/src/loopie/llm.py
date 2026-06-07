@@ -14,7 +14,14 @@ from src.loopie.artifacts import artifact_content_hash
 from src.loopie.config import get_settings
 from src.loopie.decide import ALLOWED_ACTIONS, decide_action
 from src.loopie.observability import op
-from src.loopie.providers import ProviderConfig, openai_client_kwargs, provider_registry, resolve_provider, role_provider_chain
+from src.loopie.providers import (
+    ProviderConfig,
+    is_gpt5_model,
+    openai_client_kwargs,
+    provider_registry,
+    resolve_provider,
+    role_provider_chain,
+)
 from src.loopie.reliability.budget import BudgetTracker
 from src.loopie.stores.llm_cache import cache_key, get_cached, set_cached
 
@@ -61,15 +68,29 @@ def mock_narration(
 
     if node == "triage":
         if security_flag:
-            return f"triage [{case_id}]: payment/refund requested with security_flag RAISED - routing to policy + resolution."
+            amount = ticket.get("amount")
+            amount_note = f", ${amount:,.0f} high-value" if amount else ""
+            return (
+                f"triage [{case_id}]: security-flagged payout refund{amount_note} — "
+                f"routing to policy check (stale memory v1, payout guard absent)."
+            )
         if failure_seed == "planner_loop":
             return f"triage [{case_id}]: refund missing policy-version metadata - routing to policy lookup."
         return f"triage [{case_id}]: refund request, {days}d since purchase, {tier} tier - routing to policy + resolution."
 
     if node == "memory_lookup":
         window = _refund_window_days(artifacts)
+        mem_version = 1
+        if artifacts:
+            mem_raw = (artifacts.get("memory") or {}).get("policy:refund_window", "")
+            if "45" in str(mem_raw):
+                mem_version = 1
+        freshness = "stale (v1)" if mem_version < 2 else f"v{mem_version}"
         if window is not None:
-            return f"memory_lookup [{case_id}]: refund policy window = {window} days (from Redis memory)."
+            return (
+                f"memory_lookup [{case_id}]: refund policy window = {window} days "
+                f"(Redis memory {freshness}, freshness required for high-value payouts)."
+            )
         return f"memory_lookup [{case_id}]: no refund-window policy found in Redis memory."
 
     if node == "policy_check":
@@ -336,7 +357,8 @@ class LLMGateway:
                 from langchain_openai import ChatOpenAI
 
                 model = ChatOpenAI(**openai_client_kwargs(cfg))
-                model = model.bind(model_kwargs={"seed": self.settings.llm_seed})
+                if not is_gpt5_model(cfg.model):
+                    model = model.bind(model_kwargs={"seed": self.settings.llm_seed})
                 structured = model.with_structured_output(DecisionSchema, strict=True, include_raw=True)
                 raw_result = structured.invoke(prompt)
                 if isinstance(raw_result, dict) and "parsed" in raw_result:
@@ -502,7 +524,8 @@ class LLMGateway:
                 from langchain_openai import ChatOpenAI
 
                 model = ChatOpenAI(**openai_client_kwargs(cfg))
-                model = model.bind(model_kwargs={"seed": self.settings.llm_seed})
+                if not is_gpt5_model(cfg.model):
+                    model = model.bind(model_kwargs={"seed": self.settings.llm_seed})
                 response = model.invoke(prompt)
                 text = str(response.content)
                 prompt_tokens, completion_tokens, total_tokens, cost = self._usage_from_response(

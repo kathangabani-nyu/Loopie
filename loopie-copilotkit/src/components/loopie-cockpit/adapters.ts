@@ -1,4 +1,4 @@
-import { CATEGORY_TITLES, HERO_CASE_ID, SCORE_ORDER } from "./constants";
+import { CATEGORY_TITLES, HERO_CASE_ID, SCORE_ORDER, SWARM_AGENTS, VERDICT } from "./constants";
 import type {
   ArtifactVersion,
   BudgetView,
@@ -11,6 +11,7 @@ import type {
   ScorecardCell,
   ScorecardView,
   StreamEvent,
+  SwarmView,
   TraceNode,
   VerdictView,
 } from "./types";
@@ -103,22 +104,63 @@ export function buildTraceView(state: LoopieState, phase: Phase): TraceNode[] {
   const rawTrace = run?.trace || [];
   const narration = run?.narration || {};
 
-  const nodes = rawTrace.filter((t) => t.node && t.node !== "decision");
+  const nodes = rawTrace.filter((t) => t.node);
   if (!nodes.length) return [];
 
   return nodes.map((step, i) => {
     const node = String(step.node);
-    const label = node.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    const agentMeta = SWARM_AGENTS[node];
+    const label = agentMeta?.name || node.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
     const detail = String(step.narration || narration[node] || step.reason || step.action || "");
-    const status = inferTraceStatus(node, run, scores, passed);
+    const status = inferTraceStatus(node === "decision" ? "resolution" : node, run, scores, passed);
+    const receipt = step.receipt as TraceNode["receipt"];
     return {
       id: `${node}-${i}`,
       label,
       status,
       detail,
-      ms: 90 + i * 35,
+      ms: Number(step.duration_ms) || 0,
+      receipt,
     };
   });
+}
+
+export function buildSwarmView(state: LoopieState, phase: Phase, running: boolean): SwarmView | null {
+  const run = getRunForTrace(state, phase);
+  if (!run?.trace?.length && !running) return null;
+
+  const scores =
+    phase === "patched" || phase === "counterfactual"
+      ? (Object.values(state.runs || {}).find((r) => r.label === "patched")?.scores ??
+        state.currentFailure?.scores)
+      : state.currentFailure?.scores;
+  const passed = scores ? Object.values(scores).every(Boolean) : false;
+  const byNode = new Map(
+    (run?.trace || [])
+      .filter((t) => t.node)
+      .map((t) => [String(t.node === "decision" ? "resolution" : t.node), t]),
+  );
+
+  const agents = Object.entries(SWARM_AGENTS).map(([id, meta]) => {
+    const step = byNode.get(id);
+    const nodeKey = id;
+    return {
+      id,
+      name: meta.name,
+      role: meta.role,
+      lastMs: Number(step?.duration_ms) || 0,
+      status: inferTraceStatus(nodeKey, run, scores, passed),
+      receipt: step?.receipt as TraceNode["receipt"],
+    };
+  });
+
+  const budget = buildBudgetView(state);
+  return {
+    agents,
+    providerMode: state.preflight?.provider_mode || state.preflight?.llm_mode || "mock",
+    budgetUsd: budget.estimated_cost_usd,
+    agentCount: Object.keys(SWARM_AGENTS).length,
+  };
 }
 
 export function buildFailureView(state: LoopieState): FailureView | null {
@@ -293,6 +335,8 @@ export function buildBudgetView(state: LoopieState): BudgetView {
   return {
     budget_usd: 1.0,
     estimated_cost_usd: cost,
+    chat_cost_usd: Number(b.chat_cost_usd ?? 0),
+    max_chat_cost_usd: Number(b.max_chat_cost_usd ?? 40),
     llm_calls: llmCalls,
     transitions,
     tokens: llmCalls * 3200,
@@ -358,8 +402,8 @@ export function buildVerdictView(state: LoopieState, phase: Phase): VerdictView 
   if (phase === "idle") {
     return {
       tone: "idle",
-      label: "STANDBY",
-      sub: "awaiting baseline run",
+      label: VERDICT.idle.label,
+      sub: VERDICT.idle.sub,
       scorersPassed: null,
       scorersTotal: total,
       recovered: null,
@@ -372,8 +416,8 @@ export function buildVerdictView(state: LoopieState, phase: Phase): VerdictView 
   if (phase === "baseline") {
     return {
       tone: "fail",
-      label: "FAILING",
-      sub: "baseline exposes the weak scorer path",
+      label: VERDICT.baseline.label,
+      sub: VERDICT.baseline.sub,
       scorersPassed: currentPassed,
       scorersTotal: total,
       recovered: null,
@@ -384,10 +428,11 @@ export function buildVerdictView(state: LoopieState, phase: Phase): VerdictView 
   }
 
   if (phase === "proposal" || phase === "approved") {
+    const copy = phase === "proposal" ? VERDICT.proposal : VERDICT.approved;
     return {
       tone: "stage",
-      label: phase === "proposal" ? "FIX PROPOSED" : "FIX STAGED",
-      sub: phase === "proposal" ? "correction selected for review" : "human approval locked",
+      label: copy.label,
+      sub: copy.sub,
       scorersPassed: currentPassed,
       scorersTotal: total,
       recovered: null,
@@ -399,10 +444,11 @@ export function buildVerdictView(state: LoopieState, phase: Phase): VerdictView 
 
   if (phase === "counterfactual") {
     const clean = state.counterfactual?.no_regression;
+    const copy = clean ? VERDICT.counterfactualClean : VERDICT.counterfactualDirty;
     return {
       tone: clean ? "good" : "fail",
-      label: clean ? "VERIFIED RELIABLE" : "REGRESSION DETECTED",
-      sub: clean ? "hero recovered and replay stayed clean" : "counterfactual replay needs attention",
+      label: copy.label,
+      sub: copy.sub,
       scorersPassed: patchedPassed ?? currentPassed,
       scorersTotal: total,
       recovered,
@@ -414,8 +460,8 @@ export function buildVerdictView(state: LoopieState, phase: Phase): VerdictView 
 
   return {
     tone: "good",
-    label: "RECOVERED",
-    sub: "patched rerun shows scorer recovery",
+    label: VERDICT.patched.label,
+    sub: VERDICT.patched.sub,
     scorersPassed: patchedPassed ?? currentPassed,
     scorersTotal: total,
     recovered,
@@ -435,7 +481,7 @@ export function buildScorecard(state: LoopieState, phase: Phase): ScorecardView 
   if (activeHeroScores) {
     rows.push({
       caseId: id,
-      label: phase === "patched" || phase === "counterfactual" ? "Patch recovered" : "Baseline failed",
+      label: phase === "patched" || phase === "counterfactual" ? "Patch recovered" : "Primary case failed",
       isHero: true,
       cells: scoreCells(activeHeroScores),
     });

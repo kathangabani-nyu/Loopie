@@ -1,33 +1,38 @@
 # Loopie Hosted Demo Runbook
 
-Zero-cost hosted stack: **Vercel (Next.js + CopilotKit UI) → Render (FastAPI + LangGraph swarm) → Neon Postgres + Redis Cloud + W&B Weave**.
+Zero-cost hosted stack: **Vercel (Next.js + CopilotKit UI) → Render (`loopie-api` + `loopie-agent`) → Neon Postgres + Redis Cloud + W&B Weave**.
 
 ## Architecture
 
 ```text
 Browser
-  └─ Next.js (/api/loopie/* proxies, no secrets in browser)
-       └─ LOOPIE_API_BASE → Render FastAPI (loopie_server.py)
-            ├─ LangGraph worker swarm (triage → memory → policy → resolution → evaluator)
-            ├─ Loopie supervisor pipeline (diagnose → propose → HITL approve → rerun)
-            ├─ Redis Cloud (live artifacts + event streams)
-            ├─ Neon Postgres (artifact Time Machine + cost ledger)
-            └─ Weave (live-mode traces/evals only)
+  ├─ Next.js cockpit buttons → /api/loopie/* → LOOPIE_API_BASE (loopie-api)
+  └─ CopilotKit side chat → AGENT_URL (loopie-agent, live GPT-5.5)
+
+loopie-api (Render, mock pipeline — $0 proof path)
+  ├─ LangGraph worker swarm (triage → memory → policy → resolution → evaluator)
+  ├─ Loopie supervisor pipeline (diagnose → propose → HITL approve → rerun)
+  ├─ Redis Cloud (live artifacts + event streams)
+  ├─ Neon Postgres (artifact Time Machine + cost ledger)
+  └─ Weave (live-mode traces/evals only)
+
+loopie-agent (Render, live chat only)
+  ├─ CopilotKit control agent (gpt-5.5, metered)
+  └─ HTTP tools → LOOPIE_API_BASE (same state as cockpit buttons)
 ```
 
-CopilotKit chat (optional) uses `AGENT_URL` only if you host the sample LangGraph agent separately. The **demo proof path** runs through `loopie_server`, not the chat agent.
+**Demo proof path** (baseline → fix → counterfactual) runs through **cockpit buttons → `loopie-api`** (`LOOPIE_LLM_MODE=mock`). **Live chat** is additive via **`loopie-agent`** and requires **`OPENAI_API_KEY`**.
 
 ## Default demo mode (judging-safe)
 
 | Variable | Hosted default | Purpose |
 |----------|----------------|---------|
-| `LOOPIE_LLM_MODE` | `mock` | Deterministic oracle decisions, zero token spend |
+| `LOOPIE_LLM_MODE` | `mock` on **loopie-api** | Deterministic oracle decisions, zero token spend for proof |
 | `LOOPIE_FULL_AGENTIC` | `false` | Live OpenAI decisions limited to whitelist cases |
 | `LOOPIE_HOSTED` | `1` | Require Redis + Postgres; no silent in-memory ledger |
 | `LOOPIE_PERSISTENCE_MODE` | `hosted` or `auto` | Durable audit trail for artifact proof |
-| Cursor provider | disabled | Enable only after smoke marker + explicit env |
-
-Live OpenAI rehearsal is **opt-in** after N stable mock runs with `fallback_count=0`, `dishonest_live_cases=[]`, and `oracle_mismatch_cases=[]`.
+| `LOOPIE_OPENAI_MODEL` | `gpt-5.5` on **loopie-agent** | Live side copilot only |
+| `LOOPIE_MAX_CHAT_COST_USD` | `40` on **loopie-agent** | Chat spend cap (pre-call block + ledger tracking) |
 
 ## Environment matrix
 
@@ -35,89 +40,90 @@ Live OpenAI rehearsal is **opt-in** after N stable mock runs with `fallback_coun
 
 | Variable | Required | Example |
 |----------|----------|---------|
-| `LOOPIE_API_BASE` | yes | `https://loopie-api.onrender.com` |
-| `AGENT_URL` | optional | CopilotKit chat only |
-| `OPENAI_API_KEY` | optional | Server-side CopilotKit only; never `NEXT_PUBLIC_*` |
+| `LOOPIE_API_BASE` | **yes** | `https://loopie-api.onrender.com` |
+| `AGENT_URL` | **yes** (for live chat) | `https://loopie-agent.onrender.com` |
+| `OPENAI_API_KEY` | optional on Vercel | Only if CopilotKit runtime needs it server-side; never `NEXT_PUBLIC_*` |
 
-Do **not** expose `REDIS_URL`, `POSTGRES_URL`, `WANDB_API_KEY`, or provider keys to the browser. All Loopie actions go through `/api/loopie/*`.
+Do **not** expose `REDIS_URL`, `POSTGRES_URL`, `WANDB_API_KEY`, or provider keys to the browser. All Loopie cockpit actions go through `/api/loopie/*`.
 
-### Render (FastAPI backend)
+### Render — `loopie-api` (FastAPI proof backend)
 
-Deploy via Blueprint: `render.yaml` lives at the **repo root** (required for Render to auto-discover it). It declares `rootDir: loopie-copilotkit/agent`. In Render: New → Blueprint → pick this repo → it reads `render.yaml`. Fill the four `sync: false` secrets (`REDIS_URL`, `POSTGRES_URL`, `WANDB_API_KEY`, `OPENAI_API_KEY`) in the dashboard.
+Deploy via Blueprint: `render.yaml` at repo root. Service `loopie-api` uses `rootDir: loopie-copilotkit/agent`.
 
 | Variable | Required | Notes |
 |----------|----------|-------|
-| `LOOPIE_HOSTED` | yes | `1` — startup hard-fails without Redis/Postgres |
+| `LOOPIE_HOSTED` | yes | `1` |
 | `LOOPIE_LLM_MODE` | yes | `mock` for judging |
-| `REDIS_URL` | yes | Redis Cloud connection string |
-| `POSTGRES_URL` | yes | Neon pooled connection string |
-| `PORT` | auto | Set by Render |
-| `WANDB_API_KEY` | mock: no | Required for live Weave rehearsal |
-| `WEAVE_PROJECT` | optional | Default `loopie` |
-| `OPENAI_API_KEY` | mock: no | Live mode only |
-| `LOOPIE_PROVIDER_CURSOR_ENABLED` | no | Bonus provider; requires smoke marker |
+| `REDIS_URL` | yes | Redis Cloud |
+| `POSTGRES_URL` | yes | Neon pooled URL |
+| `WANDB_API_KEY` | mock: no | Live Weave rehearsal |
+| `OPENAI_API_KEY` | mock: no | Not used when `LOOPIE_LLM_MODE=mock` |
 
-**Start command**
+**Start:** `uv run uvicorn loopie_server:app --host 0.0.0.0 --port $PORT`  
+**Health:** `GET /health`
 
-```bash
-uv run uvicorn loopie_server:app --host 0.0.0.0 --port $PORT
-```
+### Render — `loopie-agent` (LangGraph live chat)
 
-**Health check:** `GET /health` (also used by free keep-warm ping services)
+Second service in `render.yaml`. **Required for CopilotKit side chat.**
 
-**Before every recording:** `POST /reset` (via UI or curl) to reseed intentionally wrong artifacts.
+| Variable | Required | Notes |
+|----------|----------|-------|
+| `OPENAI_API_KEY` | **yes** | Service starts without it but chat is disabled until set |
+| `LOOPIE_OPENAI_MODEL` | yes | `gpt-5.5` (or pinned `gpt-5.5-2026-04-23`) |
+| `LOOPIE_API_BASE` | **yes** | Must match deployed API URL, e.g. `https://loopie-api.onrender.com` |
+| `LOOPIE_MAX_CHAT_COST_USD` | yes | Default `40` |
+| `LOOPIE_LLM_MODE` | yes | `mock` — chat is live; pipeline stays mock via HTTP |
+| `REDIS_URL` | yes | Shared with loopie-api (cost ledger) |
+| `POSTGRES_URL` | yes | Shared with loopie-api (cost ledger) |
+| `LOOPIE_HOSTED` | yes | `1` |
 
-### Neon Postgres
+**Start:** `uv run langgraph dev --host 0.0.0.0 --port $PORT --no-browser`  
+**Health:** `GET /ok`
 
-Create a database and set `POSTGRES_URL`. The backend auto-creates the `loopie` schema on first connect.
+After first deploy, verify `LOOPIE_API_BASE` on loopie-agent matches the actual `loopie-api` Render URL.
 
-### Redis Cloud
+### GitHub Actions (keep-warm)
 
-Set `REDIS_URL` with RedisJSON module when available (preflight reports `redis_json: true`). Plain Redis still works for demo artifacts.
+Set repo **Variables** (Settings → Secrets and variables → Actions → Variables):
 
-### Weave
+| Variable | Value |
+|----------|-------|
+| `RENDER_URL` | `https://loopie-api.onrender.com` |
+| `AGENT_URL` | `https://loopie-agent.onrender.com` |
 
-Mock mode: tracing disabled, zero W&B calls. Live rehearsal: set `WANDB_API_KEY` + `WEAVE_PROJECT`, switch `LOOPIE_LLM_MODE=live` only after mock suite is stable.
+Manually run **keep-warm** workflow before recording. Pings every 10 min keep both free services awake.
 
 ## Preflight
 
-`GET /preflight` (proxied at `/api/loopie/preflight`) returns:
+`GET /preflight` (proxied at `/api/loopie/preflight`) returns Redis/Postgres/provider mode. Hosted: `ok: false` → HTTP 503.
 
-- `redis_reachable`, `redis_json`
-- `postgres_reachable`, `persistence_mode` (`postgres` | `memory`)
-- `weave_enabled`, `provider_mode`, `llm_mode`, `full_agentic`
+## Deploy checklist
 
-Hosted mode: `ok: false` → HTTP 503. Startup also hard-fails if `LOOPIE_HOSTED=1` and stores are missing.
-
-## Keep-warm (Render free tier)
-
-Two zero-cost options (use both for a judged demo):
-
-1. **GitHub Actions** (in-repo, no signup): `.github/workflows/keep-warm.yml` pings every 10 min. Set repo variable `RENDER_URL` (Settings → Secrets and variables → Actions → Variables) to your Render URL. Best-effort timing; auto-disabled after 60 days idle.
-2. **UptimeRobot / cron-job.org** (more reliable for live judging), every 5 min:
-
-```text
-GET https://<render-service>/health
-```
+1. **Render secrets (both services):** `REDIS_URL`, `POSTGRES_URL`, `WANDB_API_KEY`, `OPENAI_API_KEY` (required on **loopie-agent**).
+2. **loopie-agent env:** `LOOPIE_API_BASE=https://loopie-api.onrender.com`, `LOOPIE_OPENAI_MODEL=gpt-5.5`.
+3. **Vercel env:** `LOOPIE_API_BASE=https://loopie-api.onrender.com`, `AGENT_URL=https://loopie-agent.onrender.com`.
+4. **GitHub vars:** `RENDER_URL`, `AGENT_URL` → run keep-warm manually before demo.
+5. **Warm both services**, then on hosted URL run: **Reset → Baseline → Propose → Approve → Rerun + Compare → Counterfactual Replay**.
+6. Confirm: real non-pattern timings, Redis artifact proof in UI, counterfactual `no_regression: true`, optional live chat turn shows ledger chat cost.
 
 ## Rehearsal checklist
 
-1. Deploy Render backend; confirm `/preflight` shows `ok: true`, `persistence_mode: postgres`.
-2. Deploy Vercel UI with `LOOPIE_API_BASE` pointing at Render.
-3. `POST /reset` — confirm baseline artifacts reseeded.
-4. Run mock demo path: Baseline → Propose → Approve → Patched → Compare.
-5. Confirm Weave quiet in mock (`weave_enabled: false`).
-6. Optional live pass: flip `LOOPIE_LLM_MODE=live` only after fast-lane + integration suites pass.
+1. Deploy both Render services; confirm `/health` and `/ok`.
+2. Deploy Vercel with `LOOPIE_API_BASE` + `AGENT_URL`.
+3. `POST /reset` — baseline artifacts reseeded.
+4. Full mock proof path via cockpit buttons.
+5. One live chat turn (if `OPENAI_API_KEY` set on loopie-agent); confirm Budget panel chat line updates.
 
 ## Local parity
 
 ```bash
 cd loopie-copilotkit
 npm run dev:loopie   # FastAPI :8001
+npm run dev:agent    # LangGraph :8123
 npm run dev          # Next.js UI
 ```
 
-Local dev uses in-memory ledger fallback unless Postgres is reachable. Set `LOOPIE_HOSTED=1` locally to rehearse hosted strictness.
+Set `LOOPIE_API_BASE=http://localhost:8001` and `AGENT_URL=http://localhost:8123` locally.
 
 ## Test gates
 
@@ -128,10 +134,4 @@ cd loopie-copilotkit/agent
 uv run pytest -m "not integration"
 ```
 
-Full proof lane (includes integration / hosted checks):
-
-```bash
-uv run pytest
-```
-
-Hosted + LangGraph coverage lives in `test_pipeline.py` integration tests only — no separate micro-tests.
+Note: `npm run build` passes with `ignoreBuildErrors` in `next.config.ts`; `npx tsc --noEmit` may still report legacy template TS issues unrelated to the cockpit proof path.

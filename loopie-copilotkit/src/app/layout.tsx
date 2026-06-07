@@ -14,12 +14,8 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        <title>CopilotKit</title>
-        <link
-          rel="icon"
-          type="image/svg+xml"
-          href="/copilotkit-logo-mark.svg"
-        />
+        <title>Loopie</title>
+        <link rel="icon" type="image/svg+xml" href="/loopie-mark.svg" />
       </head>
       <body className={`antialiased`}>
         <ThemeProvider>

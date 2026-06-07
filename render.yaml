@@ -26,3 +26,31 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+
+  - type: web
+    name: loopie-agent
+    runtime: python
+    rootDir: loopie-copilotkit/agent
+    plan: free
+    buildCommand: pip install uv && uv sync --frozen
+    startCommand: uv run langgraph dev --host 0.0.0.0 --port $PORT --no-browser
+    healthCheckPath: /ok
+    envVars:
+      - key: LOOPIE_HOSTED
+        value: "1"
+      - key: LOOPIE_LLM_MODE
+        value: mock
+      - key: LOOPIE_OPENAI_MODEL
+        value: gpt-5.5
+      - key: LOOPIE_MAX_CHAT_COST_USD
+        value: "40"
+      - key: LOOPIE_API_BASE
+        value: https://loopie-api.onrender.com
+      - key: LOOPIE_PERSISTENCE_MODE
+        value: hosted
+      - key: REDIS_URL
+        sync: false
+      - key: POSTGRES_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false

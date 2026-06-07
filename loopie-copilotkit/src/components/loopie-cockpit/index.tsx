@@ -16,12 +16,13 @@ import {
   buildEventStream,
   buildFailureView,
   buildScorecard,
+  buildSwarmView,
   buildTraceView,
   buildVerdictView,
   derivePhase,
   tracePassing,
 } from "./adapters";
-import { COMMANDS, HERO_CASE_ID, LIVE, PHASE_LABEL, PHASES } from "./constants";
+import { COMMANDS, COPY, LIVE, PHASE_LABEL, PHASES } from "./constants";
 import { useRipple } from "./motion";
 import {
   CorrectionPanel,
@@ -31,7 +32,15 @@ import {
   Panel,
 } from "./panels";
 import type { Phase } from "./types";
-import { BudgetMeter, CausalityTrace, EvalDelta, Scorecard, TimeMachine, VerdictStrip } from "./viz";
+import {
+  BudgetMeter,
+  CausalityTrace,
+  EvalDelta,
+  Scorecard,
+  SwarmRunTelemetry,
+  TimeMachine,
+  VerdictStrip,
+} from "./viz";
 
 async function post(action: string, body: Record<string, unknown> = {}) {
   const res = await fetch(`/api/loopie/${action}`, {
@@ -149,6 +158,7 @@ export function LoopieCockpit() {
   const budget = buildBudgetView(state);
   const verdict = buildVerdictView(state, phase);
   const scorecard = buildScorecard(state, phase);
+  const swarm = buildSwarmView(state, phase, loading || agentRunning);
   const traceIsPassing = tracePassing(state, phase);
 
   return (
@@ -181,7 +191,7 @@ export function LoopieCockpit() {
                 <div className="mark" />
                 <div>
                   <h1>LOOPIE</h1>
-                  <div className="sub">reliability CI / agent swarm</div>
+                  <div className="sub">{COPY.brandSub}</div>
                 </div>
               </div>
               <div className="grow" />
@@ -216,6 +226,9 @@ export function LoopieCockpit() {
                   }}
                 />
                 {useAgentState ? "agent" : "api"} <b>{error ? "offline" : "live"}</b>
+              </div>
+              <div className="phase-pill" title="Cockpit buttons use the deterministic mock pipeline ($0)">
+                cockpit <b>{COPY.deterministicMode}</b>
               </div>
             </div>
 
@@ -295,7 +308,7 @@ export function LoopieCockpit() {
           <VerdictStrip verdict={verdict} />
 
           <div className="grid">
-            <Panel title="Scorecard" area="scorecard" live={!!live.scorecard} scroll>
+            <Panel title="Reliability Scorecard" area="scorecard" live={!!live.scorecard} scroll>
               {scorecard ? (
                 <Scorecard data={scorecard} phase={phase} />
               ) : (
@@ -312,12 +325,13 @@ export function LoopieCockpit() {
               <EventStream events={events} />
             </Panel>
 
-            <Panel title="Failed Case" area="case" live={!!live.case}>
+            <Panel title="Failing Case" area="case" live={!!live.case}>
               <FailedCase failure={failure} />
             </Panel>
 
             <Panel
               title="Causality Trace"
+              subtitle="per-agent execution path with real latency"
               area="trace"
               live={!!live.trace}
               tag={
@@ -349,7 +363,7 @@ export function LoopieCockpit() {
               />
             </Panel>
 
-            <Panel title="Eval Delta" area="delta" live={!!live.delta} scroll={false}>
+            <Panel title="Score Delta (before → after)" area="delta" live={!!live.delta} scroll={false}>
               {evalDelta ? (
                 <EvalDelta data={evalDelta} />
               ) : (
@@ -359,6 +373,20 @@ export function LoopieCockpit() {
 
             <Panel title="Artifact Time Machine" area="timemachine" live={!!live.timemachine} scroll={false}>
               <TimeMachine history={artifactHistory} />
+            </Panel>
+
+            <Panel
+              title="Swarm Run Telemetry"
+              area="swarm"
+              live={!!live.swarm}
+              scroll
+              tag={swarm ? `${swarm.agentCount} agents` : null}
+            >
+              {swarm ? (
+                <SwarmRunTelemetry data={swarm} runKey={phase} running={loading || agentRunning} />
+              ) : (
+                <IdleNote label="no swarm telemetry yet" />
+              )}
             </Panel>
 
             <Panel title="Budget Meter" area="budget" live={!!live.budget} scroll={false}>
