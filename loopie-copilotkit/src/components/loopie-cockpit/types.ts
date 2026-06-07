@@ -77,6 +77,7 @@ export type LoopieState = {
     postgres_reachable?: boolean;
     persistence_mode?: string;
     weave_enabled?: boolean;
+    weave_project_url?: string | null;
     provider_mode?: string;
     llm_mode?: string;
     full_agentic?: boolean;
@@ -96,6 +97,7 @@ export type WeaveEvalState = {
 
 export type WeaveProofView = {
   enabled: boolean;
+  tracesUrl: string | null;
   baselineUrl: string | null;
   patchedUrl: string | null;
   baselineError: string | null;
@@ -165,6 +167,7 @@ export type FailureView = {
   observedAction?: string;
   expectedAction?: string;
   exactError: string;
+  whyFailed: string;
 };
 
 export type DemoStep = {

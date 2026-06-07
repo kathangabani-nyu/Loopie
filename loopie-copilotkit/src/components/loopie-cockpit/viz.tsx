@@ -377,7 +377,7 @@ export function EvalDelta({ data }: { data: EvalDeltaView }) {
         pct={patPct}
         total={total}
         accent="var(--aurora)"
-        glow="0 0 20px -2px oklch(0.66 0.20 292 / .7)"
+        glow="none"
         delay={0.35}
       />
       <div className="edsummary">
@@ -444,7 +444,7 @@ export function BlastRadius({
             cx={C}
             cy={C}
             fill="none"
-            stroke="oklch(0.66 0.20 292 / .5)"
+            stroke="rgba(88, 166, 255, 0.35)"
             strokeWidth={1.5}
             initial={{ r: 24, opacity: 0.7 }}
             animate={{ r: 140, opacity: 0 }}

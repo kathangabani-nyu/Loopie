@@ -17,6 +17,12 @@ def _weave_enabled() -> bool:
     return weave_tracing_enabled()
 
 
+def _weave_traces_url() -> str | None:
+    from src.loopie.observability import weave_traces_url
+
+    return weave_traces_url()
+
+
 def _provider_mode() -> str:
     settings = get_settings()
     registry = provider_registry()
@@ -60,6 +66,7 @@ def run_preflight(
         "weave_enabled": weave_enabled,
         "weave_configured": bool(os.getenv("WANDB_API_KEY")),
         "weave_flag": get_settings().weave_enabled,
+        "weave_project_url": _weave_traces_url() if os.getenv("WANDB_API_KEY") else None,
         "provider_mode": provider_mode,
         "llm_mode": settings.llm_mode,
         "full_agentic": settings.full_agentic,

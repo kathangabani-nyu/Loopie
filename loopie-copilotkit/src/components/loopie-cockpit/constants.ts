@@ -4,7 +4,6 @@ export const HERO_CASE_ID = "security_001";
 
 export const COPY = {
   brandSub: "Agent Reliability Control Plane",
-  deterministicMode: "deterministic / $0 pipeline",
   chatModel: "gpt-5.5",
 } as const;
 

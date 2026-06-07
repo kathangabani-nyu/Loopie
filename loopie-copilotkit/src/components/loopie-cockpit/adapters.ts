@@ -101,6 +101,26 @@ function exactErrorForFailure(failure: LoopieState["currentFailure"]): string {
   return `The deterministic eval failed.${action}${scorerText}`;
 }
 
+function whyFailedForCategory(failure: LoopieState["currentFailure"]): string {
+  if (!failure) return "No baseline run has executed yet.";
+  const category = failure.category || "unknown_failure";
+  const action = failure.run?.action || "unknown";
+
+  if (category === "bad_tool_authority" || category === "missing_guard") {
+    return `The resolution node authorized \`${action}\` while \`security_flag\` was still asserted — the policy guard never gated the tool surface, so a privileged action executed under an unverified identity.`;
+  }
+  if (category === "stale_memory") {
+    return `Memory lookup returned a superseded Redis artifact (stale \`refund_window\` version). Policy check evaluated against the wrong facts, so resolution committed to \`${action}\` without the current guardrails.`;
+  }
+  if (category === "looping_plan") {
+    return `The LangGraph planner cycled through triage → memory_lookup → policy_check without converging on a terminal action. Transition budget exhausted before escalation, leaving the eval in an unstable partial state.`;
+  }
+  if (category === "vat_reclassification") {
+    return `Billing context required VAT reverse-charge handling, but the routing rules lacked a \`vat_reclassification\` guard. Resolution took the default refund path (\`${action}\`) instead of escalating to billing review.`;
+  }
+  return `One or more deterministic scorers rejected the swarm output (\`${action}\`). The trace shows where policy, memory, or tool authority diverged from the expected contract.`;
+}
+
 function correctionDecisionBasis(raw: RawCorrection): string {
   const category = raw?.category || "unknown_failure";
   const failing = Array.isArray((raw as { failing_scorers?: unknown }).failing_scorers)
@@ -242,6 +262,7 @@ export function buildFailureView(state: LoopieState): FailureView | null {
     observedAction: run?.action,
     expectedAction: expectedActionForCategory(failure.category),
     exactError: exactErrorForFailure(failure),
+    whyFailed: whyFailedForCategory(failure),
   };
 }
 
@@ -264,19 +285,18 @@ function formatProofDiff(entries: Array<Record<string, unknown>>): CorrectionVie
     if ("before" in entry) {
       const before = entry.before;
       if (Array.isArray(before) && before.length === 0) {
-        lines.push({ t: "del", l: "  before: [] (no guard present)" });
+        lines.push({ t: "del", l: "  [] (no guard present)" });
       } else {
-        lines.push({ t: "del", l: `  before: ${oneLineJson(before)}` });
+        lines.push({ t: "del", l: `  ${oneLineJson(before)}` });
       }
     }
 
     if ("after" in entry) {
       const after = entry.after;
       if (Array.isArray(after)) {
-        lines.push({ t: "add", l: "  after:" });
         after.forEach((item) => lines.push({ t: "add", l: `    ${oneLineJson(item)}` }));
       } else {
-        lines.push({ t: "add", l: `  after: ${oneLineJson(after)}` });
+        lines.push({ t: "add", l: `  ${oneLineJson(after)}` });
       }
     }
 
@@ -294,8 +314,7 @@ function buildDiffFromProposal(
   if (type === "routing_rule") {
     return [
       { t: "ctx", l: "Redis artifact: routing:rules" },
-      { t: "del", l: "  no security_flag_blocks_refund guard" },
-      { t: "add", l: "  add rule:" },
+      { t: "del", l: "  (no security_flag_blocks_refund guard)" },
       ...prettyJsonLines(proposal, "    ").map((l) => ({ t: "add" as const, l })),
     ];
   }
@@ -390,6 +409,7 @@ export function buildWeaveProofView(state: LoopieState): WeaveProofView | null {
 
   return {
     enabled,
+    tracesUrl: state.preflight?.weave_project_url || null,
     baselineUrl: baseline?.weave_project_url || null,
     patchedUrl: patched?.weave_project_url || null,
     baselineError: baseline?.weave_eval_error || null,

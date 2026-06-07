@@ -24,7 +24,7 @@ import {
   derivePhase,
   tracePassing,
 } from "./adapters";
-import { COMMANDS, COPY, LIVE, PHASE_LABEL, PHASES } from "./constants";
+import { COMMANDS, COPY, LIVE, PHASE_LABEL, PHASES, SWARM_AGENTS } from "./constants";
 import { useRipple } from "./motion";
 import {
   CorrectionPanel,
@@ -167,6 +167,44 @@ export function LoopieCockpit() {
   const demoBrief = buildDemoBriefView(state, phase);
   const weaveProof = buildWeaveProofView(state);
 
+  const swarmRunning = loading || agentRunning;
+  const swarmTraced =
+    Boolean(swarm?.agents.some((a) => a.lastMs > 0)) ||
+    Boolean(weaveProof?.baselineUrl || weaveProof?.patchedUrl);
+  const swarmState = swarmRunning ? "running" : swarmTraced ? "traced" : "configured";
+  const swarmDot =
+    swarmState === "traced" ? "#3fb950" : swarmState === "running" ? "#58a6ff" : "#484f58";
+  const swarmTooltip = `LangGraph swarm: ${Object.keys(SWARM_AGENTS).join(" → ")}`;
+
+  const redisReachable = state.preflight?.redis_reachable;
+  const redisState =
+    redisReachable === undefined ? "unknown" : redisReachable ? "live" : "offline";
+  const redisLabel =
+    redisState === "live" && state.preflight?.redis_json ? "live +JSON" : redisState;
+  const redisDot =
+    redisState === "live" ? "#3fb950" : redisState === "offline" ? "#f85149" : "#484f58";
+
+  const weaveEnabled = state.preflight?.weave_enabled;
+  const weaveHasEval = Boolean(weaveProof?.baselineUrl || weaveProof?.patchedUrl);
+  const weaveState =
+    weaveHasEval
+      ? "eval linked"
+      : weaveEnabled === undefined
+        ? "unknown"
+        : weaveEnabled
+          ? "enabled"
+          : "off";
+  const weaveDot =
+    weaveState === "eval linked"
+      ? "#3fb950"
+      : weaveState === "enabled"
+        ? "#58a6ff"
+        : "#484f58";
+  const weaveTracesUrl = state.preflight?.weave_project_url || null;
+
+  const providerMode = swarm?.providerMode || state.preflight?.provider_mode || state.preflight?.llm_mode || "mock";
+  const modeLabel = providerMode === "live" ? "live" : "mock · $0";
+
   return (
     <div className="loopie-cockpit-root">
       <div className="stage">
@@ -209,9 +247,9 @@ export function LoopieCockpit() {
                     height: 7,
                     borderRadius: 99,
                     display: "inline-block",
-                    background: phase === "idle" ? "#44485c" : "#7fe6d8",
-                    boxShadow: phase === "idle" ? "none" : "0 0 10px 1px #7fe6d8",
-                    transition: "background .5s, box-shadow .5s",
+                    background: phase === "idle" ? "#484f58" : "#58a6ff",
+                    boxShadow: "none",
+                    transition: "background .5s",
                   }}
                 />
                 phase <b>{PHASE_LABEL[phase]}</b>
@@ -226,16 +264,83 @@ export function LoopieCockpit() {
                     width: 7,
                     height: 7,
                     borderRadius: 99,
-                    background: error ? "#ff5a5a" : "#9b6bff",
-                    boxShadow: error ? "0 0 10px 1px #ff5a5a" : "0 0 10px 1px #9b6bff",
+                    background: error ? "#f85149" : "#58a6ff",
+                    boxShadow: "none",
                     display: "inline-block",
                   }}
                 />
                 {hasRestState ? "api" : useAgentState ? "agent" : "api"}{" "}
                 <b>{error ? "offline" : "live"}</b>
               </div>
-              <div className="phase-pill" title="Cockpit buttons use the deterministic mock pipeline ($0)">
-                cockpit <b>{COPY.deterministicMode}</b>
+              <div className="stack-cluster">
+                <div className="phase-pill" title={swarmTooltip}>
+                  <span
+                    className="dot"
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: 99,
+                      background: swarmDot,
+                      boxShadow: "none",
+                      display: "inline-block",
+                    }}
+                  />
+                  swarm <b>{swarmState}</b>
+                </div>
+                <div className="phase-pill" title="Redis artifact store reachability">
+                  <span
+                    className="dot"
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: 99,
+                      background: redisDot,
+                      boxShadow: "none",
+                      display: "inline-block",
+                    }}
+                  />
+                  redis <b>{redisLabel}</b>
+                </div>
+                {weaveTracesUrl ? (
+                  <a
+                    className="phase-pill phase-pill-link"
+                    href={weaveTracesUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Open the live W&B Weave traces dashboard"
+                  >
+                    <span
+                      className="dot"
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: 99,
+                        background: weaveDot,
+                        boxShadow: "none",
+                        display: "inline-block",
+                      }}
+                    />
+                    weave <b>{weaveState}</b>
+                  </a>
+                ) : (
+                  <div className="phase-pill" title="W&B Weave tracing and eval links">
+                    <span
+                      className="dot"
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: 99,
+                        background: weaveDot,
+                        boxShadow: "none",
+                        display: "inline-block",
+                      }}
+                    />
+                    weave <b>{weaveState}</b>
+                  </div>
+                )}
+              </div>
+              <div className="phase-pill" title={`Provider mode: ${providerMode}`}>
+                mode <b>{modeLabel}</b>
               </div>
             </div>
 
@@ -385,7 +490,7 @@ export function LoopieCockpit() {
             </Panel>
 
             <Panel
-              title="Score Delta (before -> after)"
+              title="Score Delta"
               subtitle="same eval, two artifact states + Weave compare"
               area="delta"
               live={!!live.delta || !!weaveProof}

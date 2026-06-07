@@ -51,6 +51,19 @@ def weave_eval_url(eval_id: str, *, entity: str | None = None, project: str | No
     return f"https://wandb.ai/{project}/weave/evaluations/{eval_id}"
 
 
+def weave_traces_url(*, entity: str | None = None, project: str | None = None) -> str | None:
+    """Link to the live Weave traces dashboard (ops as they fire), independent of any eval.
+
+    Returns None when no entity is known, so the cockpit never renders a dead link.
+    """
+    settings = get_settings()
+    entity = entity or os.getenv("WANDB_ENTITY", "")
+    project = project or settings.weave_project
+    if not entity:
+        return None
+    return f"https://wandb.ai/{entity}/{project}/weave/traces"
+
+
 def op(name: str) -> Callable[[F], F]:
     """Decorate with weave.op when LOOPIE_WEAVE_ENABLED and W&B creds are present."""
 

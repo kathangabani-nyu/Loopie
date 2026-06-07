@@ -54,7 +54,7 @@ export function Panel({
           style={{
             padding: "0 20px 18px",
             overflow: "auto",
-            overscrollBehavior: scroll ? "contain" : "auto",
+            overscrollBehavior: "auto",
           }}
         >
           {children}
@@ -89,12 +89,24 @@ export function WeaveProofPanel({ proof }: { proof: WeaveProofView }) {
   return (
     <div className="weave-proof">
       <div className="weave-proof-head">
-        <span className="weave-proof-title">W&B Weave evals</span>
+        <span className="weave-proof-title">W&B Weave</span>
         <span className={`weave-proof-badge${proof.enabled ? " on" : ""}`}>
           {proof.enabled ? "tracing on" : "tracing off"}
         </span>
       </div>
       <div className="weave-proof-links">
+        <div className="weave-proof-row">
+          <span className="weave-proof-label">Live traces</span>
+          {proof.tracesUrl ? (
+            <a className="weave-proof-link" href={proof.tracesUrl} target="_blank" rel="noreferrer">
+              open Weave dashboard
+            </a>
+          ) : proof.enabled ? (
+            <span className="weave-proof-muted">set WANDB_ENTITY for link</span>
+          ) : (
+            <span className="weave-proof-muted">tracing off</span>
+          )}
+        </div>
         <div className="weave-proof-row">
           <span className="weave-proof-label">Baseline</span>
           {proof.baselineUrl ? (
@@ -200,6 +212,10 @@ export function FailedCase({ failure }: { failure: FailureView | null }) {
             <div>
               <span className="errorBoxLabel">Exact error</span>
               <p>{failure.exactError}</p>
+            </div>
+            <div className="whyFailedBox">
+              <span className="errorBoxLabel">Root cause</span>
+              <p>{failure.whyFailed}</p>
             </div>
             <div className="actionCompare">
               <div>

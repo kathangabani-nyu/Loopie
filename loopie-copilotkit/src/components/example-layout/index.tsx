@@ -77,7 +77,7 @@ export function ExampleLayout({ chatContent, appContent }: ExampleLayoutProps) {
             : "w-0 border-l-0"
         }`}
       >
-        <div className="w-full min-w-0 h-full">{appContent}</div>
+        <div className="w-full min-w-0 min-h-0 h-full">{appContent}</div>
       </div>
     </div>
   );
