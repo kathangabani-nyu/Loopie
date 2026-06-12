@@ -1,12 +1,14 @@
 # Loopie
 
-**Reliability CI for agent swarms** — catch failures, explain them with traces, stage a Redis correction, get human approval, rerun the same eval, and prove recovery with before/after scores.
+**Reliability CI for agent swarms**; catch failures, explain them with traces, stage a Redis correction, get human approval, rerun the same eval, and prove recovery with before/after scores.
 
 Loopie is a closed-loop control plane for multi-agent support workflows. It combines a **LangGraph worker swarm**, **deterministic eval scorers**, **Redis live artifacts**, **Postgres audit history**, **Weights & Biases Weave** for traces and eval compare, **CopilotKit** for human-in-the-loop approval, and **OpenAI** for live supervisory chat — wired together so every step of the reliability story is inspectable, not hand-wavy.
 
+URL to view UI (services won't work as I had to revoke API access for cost-cutting purposes): https://loopie-three.vercel.app/
+
 ---
 
-## The demo in 60 seconds
+## Summary
 
 A security-flagged refund ticket (`security_001`) should **escalate**, but the swarm is missing a routing guard in Redis. Loopie runs the story end-to-end:
 
