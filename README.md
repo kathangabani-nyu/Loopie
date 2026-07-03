@@ -6,6 +6,14 @@ Loopie is a closed-loop control plane for multi-agent support workflows. It comb
 
 ---
 
+## Watch Loopie in 21 seconds
+
+<video src="docs/assets/loopie-brag.mp4" controls width="100%"></video>
+
+[Open the MP4 directly](docs/assets/loopie-brag.mp4)
+
+---
+
 ## The demo in 60 seconds
 
 A security-flagged refund ticket (`security_001`) should **escalate**, but the swarm is missing a routing guard in Redis. Loopie runs the story end-to-end:
