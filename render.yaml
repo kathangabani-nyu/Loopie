@@ -32,7 +32,7 @@ services:
       - key: WANDB_API_KEY
         sync: false
       - key: WANDB_ENTITY
-        sync: false
+        value: kathangabani-weights-biases
       - key: OPENAI_API_KEY
         sync: false
       - key: LOOPIE_API_TOKEN
