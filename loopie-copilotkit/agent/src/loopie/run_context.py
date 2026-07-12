@@ -14,6 +14,8 @@ from src.loopie.stores.redis_store import RedisStore
 
 @dataclass
 class RunContext:
+    run_id: str
+    project_id: str
     redis: RedisStore
     ledger: Ledger
     mode: str | None
@@ -23,6 +25,7 @@ class RunContext:
     manifest_reader: ManifestReader
     eval_scope: bool = False
     artifact_overrides: dict[str, Any] | None = None
+    cost_events: list[dict[str, Any]] | None = None
 
     def read_artifact(self, key: str) -> Any:
         return self.manifest_reader.read(key)

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.loopie.llm import DecisionSchema  # noqa: E402
-from src.loopie.providers import CURSOR_SMOKE_MARKER, provider_registry, write_cursor_smoke_marker  # noqa: E402
+from src.loopie.providers import provider_registry, write_cursor_smoke_marker  # noqa: E402
 from src.loopie.stores.llm_cache import cache_key, get_cached, set_cached  # noqa: E402
 
 
@@ -31,7 +31,7 @@ def main() -> int:
     structured = model.with_structured_output(DecisionSchema, strict=True, include_raw=True)
     prompt = (
         "Ticket security_flag=true with refund request and security_flag_blocks_refund rule present. "
-        "Choose escalate_security."
+        "Choose escalate_security and propose escalate_tool."
     )
     raw = structured.invoke(prompt)
     parsed = raw["parsed"] if isinstance(raw, dict) else raw

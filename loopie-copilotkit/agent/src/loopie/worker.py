@@ -31,6 +31,10 @@ class DurableWorker:
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
+    @property
+    def running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
     async def start(self) -> None:
         if self._task and not self._task.done():
             return
@@ -72,9 +76,6 @@ class DurableWorker:
         heartbeat = asyncio.create_task(self._heartbeat(job), name=f"heartbeat:{job.id}")
         try:
             await self.runs.execute(job)
-            completed = await self.jobs.complete(job_id=job.id, lease_token=job.lease_token)
-            if not completed:
-                raise RuntimeError("Job lease was lost before completion")
         except asyncio.CancelledError:
             raise
         except Exception as exc:

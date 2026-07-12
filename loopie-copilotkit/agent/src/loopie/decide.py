@@ -18,9 +18,9 @@ __all__ = ["ALLOWED_ACTIONS", "decide_action", "decide_tool_calls"]
 def decide_tool_calls(action: str) -> list[dict[str, Any]]:
     if action == "approve_refund":
         return [{"name": "refund_tool", "args": {}}]
-    if action == "escalate_security":
+    if action in {"escalate_security", "require_security_review"}:
         return [{"name": "escalate_tool", "args": {"reason": "security_flag"}}]
-    if action in {"deny_refund_offer_credit", "block_refund_tool"}:
+    if action == "deny_refund_offer_credit":
         return [{"name": "crm_lookup", "args": {}}]
     if action in {"escalate_billing_review", "require_security_review", "escalate_after_loop"}:
         return [{"name": "escalate_tool", "args": {}}]

@@ -18,6 +18,7 @@ from typing import Any
 from src.loopie.taxonomy import DEFAULT_ACTIONS, parse_taxonomy
 
 DEFAULT_PROJECT_ID = "00000000-0000-0000-0000-000000000001"
+SCORER_VERSION = "v2"
 KNOWN_MEMORY_KEYS = ("policy:refund_window", "policy:vat_reverse_charge")
 
 
@@ -27,6 +28,10 @@ def _canonical_json(value: Any) -> str:
 
 def _content_hash(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def snapshot_content_hash(value: Any) -> str:
+    return _content_hash(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +61,10 @@ class RunManifest:
     project_id: str
     ticket_id: str
     ticket_version: int
+    ticket_snapshot: dict[str, Any]
+    ticket_content_hash: str
+    evaluation_snapshot: dict[str, Any] | None
+    scorer_version: str
     artifacts: tuple[ArtifactSnapshot, ...]
     prompt_version: str
     schema_version: str
@@ -71,6 +80,9 @@ class RunManifest:
                 "project_id": self.project_id,
                 "ticket_id": self.ticket_id,
                 "ticket_version": self.ticket_version,
+                "ticket_content_hash": self.ticket_content_hash,
+                "evaluation_snapshot": self.evaluation_snapshot,
+                "scorer_version": self.scorer_version,
                 "artifacts": [
                     {"key": item.key, "version": item.version, "hash": item.content_hash}
                     for item in self.artifacts
@@ -89,6 +101,10 @@ class RunManifest:
             "project_id": self.project_id,
             "ticket_id": self.ticket_id,
             "ticket_version": self.ticket_version,
+            "ticket_snapshot": self.ticket_snapshot,
+            "ticket_content_hash": self.ticket_content_hash,
+            "evaluation_snapshot": self.evaluation_snapshot,
+            "scorer_version": self.scorer_version,
             "artifacts": [
                 {
                     "key": item.key,
@@ -147,6 +163,56 @@ class ManifestReader:
     def read_set(self) -> list[dict[str, str]]:
         return [self._reads[key].to_record() for key in sorted(self._reads)]
 
+    def ticket_input(self) -> dict[str, Any]:
+        """Return the immutable agent input captured when the run was admitted."""
+        facts = dict(self.manifest.ticket_snapshot.get("facts") or {})
+        return {
+            "case_id": self.manifest.ticket_snapshot["external_id"],
+            "version": int(self.manifest.ticket_snapshot.get("version", 1)),
+            "request": self.manifest.ticket_snapshot["body"],
+            **facts,
+        }
+
+
+def build_ticket_snapshot(ticket: dict[str, Any]) -> dict[str, Any]:
+    """Normalize persisted tickets and fixture inputs into one immutable shape."""
+    metadata = dict(ticket.get("metadata") or {})
+    facts = dict(ticket.get("facts") or {})
+    for key in (
+        "customer_tier",
+        "days_since_purchase",
+        "security_flag",
+        "amount_minor",
+        "currency",
+        "amount_source",
+        "amount",
+        "must_check_policy_version",
+    ):
+        if key not in facts and key in ticket:
+            facts[key] = ticket[key]
+        if key not in facts and key in metadata:
+            facts[key] = metadata[key]
+    if facts.get("amount_minor") is not None and "amount" not in facts:
+        facts["amount"] = int(facts["amount_minor"]) / 100
+    if facts.get("amount") is not None and facts.get("amount_minor") is None:
+        facts["amount_minor"] = round(float(facts["amount"]) * 100)
+        facts.setdefault("currency", "USD")
+        facts.setdefault("amount_source", "explicit")
+    external_id = str(ticket.get("external_id") or ticket.get("case_id"))
+    body = str(ticket.get("body") or ticket.get("request") or "")
+    return {
+        "id": str(ticket["id"]) if ticket.get("id") else None,
+        "external_id": external_id,
+        "version": int(ticket.get("version", 1)),
+        "subject": str(ticket.get("subject") or body[:120]),
+        "body": body,
+        "channel": str(ticket.get("channel") or "fixture"),
+        "customer_ref": ticket.get("customer_ref"),
+        "facts": facts,
+        "metadata": metadata,
+        "tags": list(ticket.get("tags") or []),
+    }
+
 
 def build_run_manifest(
     redis: Any,
@@ -158,6 +224,7 @@ def build_run_manifest(
     model_version: str,
     tool_version: str = "v1",
     code_version: str | None = None,
+    evaluation_snapshot: dict[str, Any] | None = None,
 ) -> RunManifest:
     """Materialize every artifact a run may read, before graph execution."""
     memories = {
@@ -210,11 +277,17 @@ def build_run_manifest(
             version=f"sha256:{_content_hash(action_taxonomy)[:16]}",
         ),
     )
+    ticket_snapshot = build_ticket_snapshot(ticket)
+    ticket_content_hash = _content_hash(ticket_snapshot)
     return RunManifest(
         id=str(uuid.uuid4()),
         project_id=project_id,
-        ticket_id=str(ticket["case_id"]),
-        ticket_version=int(ticket.get("version", 1)),
+        ticket_id=ticket_snapshot["external_id"],
+        ticket_version=int(ticket_snapshot["version"]),
+        ticket_snapshot=ticket_snapshot,
+        ticket_content_hash=ticket_content_hash,
+        evaluation_snapshot=evaluation_snapshot,
+        scorer_version=SCORER_VERSION,
         artifacts=snapshots,
         prompt_version=prompt_version,
         schema_version=schema_version,

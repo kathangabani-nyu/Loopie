@@ -44,7 +44,7 @@
 .lp-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .lp-form label { display: grid; gap: 6px; color: var(--lp-muted); font-size: 12px; }
 .lp-form .wide { grid-column: 1 / -1; }
-.lp-form input, .lp-form textarea { color: var(--lp-text); background: #0c1119; border: 1px solid var(--lp-border); border-radius: 9px; padding: 10px 12px; font: inherit; }
+.lp-form input, .lp-form textarea, .lp-form select { color: var(--lp-text); background: #0c1119; border: 1px solid var(--lp-border); border-radius: 9px; padding: 10px 12px; font: inherit; }
 .lp-form textarea { min-height: 100px; resize: vertical; }
 .lp-button { border: 0; background: var(--lp-blue); color: #06101c; font-weight: 700; border-radius: 9px; padding: 10px 14px; cursor: pointer; width: fit-content; }
 .lp-empty, .lp-error { color: var(--lp-muted); padding: 24px; }

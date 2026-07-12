@@ -163,9 +163,9 @@ def current_weave_call_evidence() -> dict[str, str] | None:
             "call_id": str(call.id),
             "trace_id": str(call.trace_id),
         }
-        dashboard = weave_traces_url()
+        dashboard = getattr(call, "ui_url", None) or weave_traces_url()
         if dashboard:
-            evidence["dashboard_url"] = dashboard
+            evidence["dashboard_url"] = str(dashboard)
         return evidence
     except Exception:
         return None

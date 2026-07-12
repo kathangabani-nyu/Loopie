@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 import { RecordTable } from "./record-table";
 import { useResource } from "./use-resource";
@@ -8,13 +9,16 @@ import { useResource } from "./use-resource";
 export function Corrections() {
   const resource = useResource<Record<string, unknown>[]>("corrections", []);
   const [message, setMessage] = useState<string | null>(null);
+  const [patchedRun, setPatchedRun] = useState<string | null>(null);
   async function approve(id: string) {
     const response = await fetch(`/api/loopie/v1/corrections/${id}/approve`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ actor: "owner", channel: "ui" }),
     });
     const payload = await response.json();
-    setMessage(response.ok ? `Applied ${id}; patched rerun ${payload.patched_run?.run_id ?? "not required"} queued.` : payload.detail ?? payload.error);
+    const runId = payload.patched_run?.run_id ? String(payload.patched_run.run_id) : null;
+    setPatchedRun(response.ok ? runId : null);
+    setMessage(response.ok ? `Applied ${id}; patched rerun ${runId ?? "not required"} queued.` : payload.detail ?? payload.error);
     await resource.refresh();
   }
   async function reject(id: string) {
@@ -29,6 +33,7 @@ export function Corrections() {
   return <>
     <header className="lp-header"><div><h1>Corrections</h1><p>Only passing shadow proposals can cross the human approval boundary.</p></div><div className="lp-live">Live updates</div></header>
     {message ? <div className="lp-card">{message}</div> : null}
+    {patchedRun ? <div className="lp-card"><Link href={`/runs/${patchedRun}`}>Open patched run →</Link></div> : null}
     <RecordTable rows={resource.data} columns={["id", "status", "kind", "failure_case", "base_artifact_version", "shadow_passed", "created_at"]} />
     <section className="lp-section"><h2 className="lp-section-title">Ready for approval</h2>
       <div className="lp-grid">{resource.data.filter(row => row.status === "proposed" && row.shadow_passed).map(row => (

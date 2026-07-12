@@ -231,7 +231,6 @@ class Ledger:
         self,
         *,
         run_id: str,
-        provider: str | None = None,
         model: str,
         prompt_tokens: int,
         completion_tokens: int,
@@ -239,9 +238,14 @@ class Ledger:
         estimated_cost: float,
         stop_reason: str,
         mode: str,
+        provider: str | None = None,
+        project_id: str = DEFAULT_PROJECT_ID,
+        run_uuid: str | None = None,
     ) -> None:
         row = {
             "run_id": run_id,
+            "project_id": project_id,
+            "run_uuid": run_uuid,
             "provider": provider,
             "model": model,
             "prompt_tokens": prompt_tokens,
@@ -256,15 +260,17 @@ class Ledger:
                 conn.execute(
                     """
                     INSERT INTO loopie.cost_ledger
-                    (run_id, provider, model, prompt_tokens, completion_tokens, total_tokens,
+                    (project_id, run_uuid, run_id, provider, model, prompt_tokens, completion_tokens, total_tokens,
                      estimated_cost, stop_reason, mode)
-                    VALUES (%(run_id)s, %(provider)s, %(model)s, %(prompt_tokens)s, %(completion_tokens)s,
+                    VALUES (%(project_id)s, %(run_uuid)s, %(run_id)s, %(provider)s, %(model)s, %(prompt_tokens)s, %(completion_tokens)s,
                             %(total_tokens)s, %(estimated_cost)s, %(stop_reason)s, %(mode)s)
                     """,
                     row,
                 )
                 conn.commit()
         except Exception:
+            if self._postgres_ok or get_settings().requires_durable_stores:
+                raise
             self._memory_costs.append(row)
 
     def cost_by_provider(self) -> dict[str, float]:
@@ -324,21 +330,32 @@ class Ledger:
         except Exception:
             return [r for r in self._memory_rows if r["artifact_key"] == artifact_key]
 
-    def record_audit(self, event_type: str, payload: dict[str, Any]) -> int | None:
+    def record_audit(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        project_id: str = DEFAULT_PROJECT_ID,
+        run_id: str | None = None,
+    ) -> int:
         try:
             with self._connect() as conn:
                 row = conn.execute(
                     """
-                    INSERT INTO loopie.audit_events (event_type, payload)
-                    VALUES (%s, %s::jsonb)
+                    INSERT INTO loopie.audit_events (project_id, run_id, event_type, payload)
+                    VALUES (%s, %s, %s, %s::jsonb)
                     RETURNING id
                     """,
-                    (event_type, json.dumps(payload)),
+                    (project_id, run_id, event_type, json.dumps(payload)),
                 ).fetchone()
                 conn.commit()
-                return int(row["id"]) if row else None
+                if row is None:
+                    raise RuntimeError("Audit event insert returned no receipt")
+                return int(row["id"])
         except Exception:
-            return None
+            if self._postgres_ok or get_settings().requires_durable_stores:
+                raise
+            return 1
 
     def register_correction(
         self,

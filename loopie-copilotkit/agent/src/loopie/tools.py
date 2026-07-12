@@ -6,11 +6,14 @@ from typing import Any
 
 from src.loopie.artifacts import artifact_value_hash
 from src.loopie.decide import _has_rule
+from src.loopie.observability import op
 from src.loopie.policy.dsl import evaluate_policy, parse_policy_rule
+from src.loopie.taxonomy import allowed_effect_tools, normalize_action
 
 _SECURITY_GUARD = "security_flag_blocks_refund"
 
 
+@op("tool.crm_lookup")
 def crm_lookup(context: dict[str, Any]) -> dict[str, Any]:
     ticket = context.get("ticket") or {}
     tier = ticket.get("customer_tier", "standard")
@@ -23,6 +26,7 @@ def crm_lookup(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@op("tool.risk_score_lookup")
 def risk_score_lookup(context: dict[str, Any]) -> dict[str, Any]:
     ticket = context.get("ticket") or {}
     artifacts = context.get("artifacts") or {}
@@ -45,6 +49,7 @@ def risk_score_lookup(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@op("tool.policy_version_read")
 def policy_version_read(mem: dict[str, Any] | None, key: str = "policy:refund_window") -> dict[str, Any]:
     mem = mem or {"value": "", "version": 1}
     version = int(mem.get("version", 1))
@@ -98,35 +103,21 @@ def evaluate_decision_policies(
     }
 
 
+@op("tool.refund_tool")
 def refund_tool(context: dict[str, Any]) -> dict[str, Any]:
     ticket = context.get("ticket") or {}
-    artifacts = context.get("artifacts") or {}
-    action = context.get("action", "")
     amount = ticket.get("amount")
-    policy_evidence = evaluate_decision_policies(ticket, artifacts, action, ["refund_tool"])
-    if not policy_evidence["passed"]:
-        return {
-            "tool": "refund_tool",
-            "authorization": "blocked",
-            "reason": "; ".join(policy_evidence["violations"]),
-            "amount": amount,
-            "violated_rules": policy_evidence["violated_rules"],
-        }
-    if action == "approve_refund":
-        return {
-            "tool": "refund_tool",
-            "authorization": "allowed",
-            "reason": "all applicable approved policies passed",
-            "amount": amount,
-        }
     return {
         "tool": "refund_tool",
-        "authorization": "blocked",
-        "reason": f"action {action} blocks refund",
+        "status": "simulated",
         "amount": amount,
+        "amount_minor": ticket.get("amount_minor"),
+        "currency": ticket.get("currency"),
+        "case_id": ticket.get("case_id"),
     }
 
 
+@op("tool.escalate_security")
 def escalate_security(context: dict[str, Any]) -> dict[str, Any]:
     ticket = context.get("ticket") or {}
     return {
@@ -141,56 +132,84 @@ def escalate_tool(context: dict[str, Any]) -> dict[str, Any]:
     return escalate_security(context)
 
 
-def audit_log_write(ledger: Any, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
-    event_id = ledger.record_audit(event_type, payload)
-    return {"tool": "audit_log_write", "audit_event_id": event_id, "event_type": event_type}
+def execute_evidence_tool(
+    name: str,
+    *,
+    ticket: dict[str, Any],
+    artifacts: dict[str, Any],
+    policy_memory: dict[str, Any],
+    args: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Execute a read-only evidence tool against pinned run inputs."""
+    if args:
+        raise ValueError(f"evidence tool {name} does not accept arguments")
+    if name == "crm_lookup":
+        return crm_lookup({"ticket": ticket})
+    if name == "risk_score_lookup":
+        return risk_score_lookup({"ticket": ticket, "artifacts": artifacts})
+    if name == "policy_version_read":
+        return policy_version_read(policy_memory)
+    raise ValueError(f"unknown evidence tool: {name}")
 
 
-def run_evidence_tools(
+def authorize_and_execute(
     ticket: dict[str, Any],
     artifacts: dict[str, Any],
     action: str,
-    policy_memory: dict[str, Any],
-    ledger: Any,
+    proposed_tools: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    crm = crm_lookup({"ticket": ticket})
-    risk = risk_score_lookup({"ticket": ticket, "artifacts": artifacts})
-    policy = policy_version_read(policy_memory)
+    """Authorize model-proposed effects once, then execute only approved calls."""
+    action = normalize_action(action)
+    proposed: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in proposed_tools:
+        name = str(raw.get("name", ""))
+        if not name or name in seen:
+            continue
+        proposed.append({"name": name, "args": dict(raw.get("args") or {})})
+        seen.add(name)
 
-    if action in {"escalate_security", "block_refund_tool", "require_security_review"}:
-        resolution_tool = escalate_security({"ticket": ticket})
-        tool_attempt = "escalate_security"
-    elif action == "approve_refund":
-        resolution_tool = refund_tool({"ticket": ticket, "artifacts": artifacts, "action": action})
-        tool_attempt = "refund_tool"
-    else:
-        resolution_tool = escalate_security({"ticket": ticket})
-        tool_attempt = "escalate_security"
+    proposed_names = [item["name"] for item in proposed]
+    policy = evaluate_decision_policies(ticket, artifacts, action, proposed_names)
+    allowed_for_action = allowed_effect_tools(action)
+    denied_names = {name for name in proposed_names if name not in allowed_for_action}
+    if not policy["passed"]:
+        denied_names.update(proposed_names)
+    prohibited_names = {"refund_tool"} if ticket.get("security_flag") else set()
+    denied_names.update(name for name in proposed_names if name in prohibited_names)
 
-    allowed = resolution_tool.get("authorization", "allowed") == "allowed"
-    policy_result = "allowed" if allowed else "blocked"
-    authorization = "allowed" if allowed else "denied_after_attempt"
-    audit = audit_log_write(
-        ledger,
-        "swarm_resolution",
-        {
-            "case_id": ticket.get("case_id"),
-            "action": action,
-            "tool_attempt": tool_attempt,
-            "policy_result": policy_result,
-            "authorization": authorization,
-            "violated_rules": resolution_tool.get("violated_rules", []),
-        },
-    )
+    authorized = [item for item in proposed if item["name"] not in denied_names]
+    executed = []
+    for call in authorized:
+        result = execute_tool(
+            call["name"],
+            {"ticket": ticket, "action": action, "artifacts": artifacts, "args": call["args"]},
+        )
+        executed.append({"name": call["name"], "mode": "simulated", "receipt": result})
+
+    blocked_names = denied_names | prohibited_names
+    audit_payload = {
+        "case_id": ticket.get("case_id"),
+        "action": action,
+        "proposed_tools": proposed_names,
+        "authorized_tools": [item["name"] for item in authorized],
+        "blocked_tools": sorted(blocked_names),
+        "denied_proposals": sorted(denied_names),
+        "prohibited_tools": sorted(prohibited_names),
+        "executed_tools": [item["name"] for item in executed],
+        "policy_result": "allowed" if policy["passed"] and not denied_names else "blocked",
+        "violated_rules": policy["violated_rules"],
+    }
     return {
-        "crm": crm,
-        "risk": risk,
         "policy": policy,
-        "resolution_tool": resolution_tool,
-        "tool_attempt": tool_attempt,
-        "policy_result": policy_result,
-        "authorization": authorization,
-        "audit_event_id": audit.get("audit_event_id"),
+        "proposed_tools": proposed,
+        "authorized_tools": authorized,
+        "blocked_tools": sorted(blocked_names),
+        "denied_proposals": sorted(denied_names),
+        "prohibited_tools": sorted(prohibited_names),
+        "executed_tools": executed,
+        "policy_result": audit_payload["policy_result"],
+        "audit_payload": audit_payload,
     }
 
 
@@ -201,4 +220,8 @@ def execute_tool(name: str, context: dict[str, Any]) -> dict[str, Any]:
         return escalate_tool(context)
     if name == "crm_lookup":
         return crm_lookup(context)
-    return {"tool": name, "status": "unknown"}
+    if name == "risk_score_lookup":
+        return risk_score_lookup(context)
+    if name == "policy_version_read":
+        return policy_version_read(context.get("policy_memory"))
+    raise ValueError(f"unknown tool: {name}")

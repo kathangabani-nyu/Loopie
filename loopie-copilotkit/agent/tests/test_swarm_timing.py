@@ -5,9 +5,9 @@ from src.loopie.runner import run_ticket, seed_baseline, tickets_by_id
 
 EXPECTED_RECEIPT_KEYS = {
     "triage": {"classification", "security_flag", "amount", "tier"},
-    "memory_lookup": {"policy_version", "freshness", "artifact_hash"},
-    "policy_check": {"applicable_rules", "approved_rules_checked", "policy_read_sets"},
-    "resolution": {"tool_attempt", "policy_result", "authorization", "action"},
+    "context": {"policy_version", "freshness", "artifact_hash", "approved_rules_loaded", "routing_rules_count"},
+    "resolution": {"iterations", "evidence_calls", "proposed_tools", "action"},
+    "execution": {"proposed_tools", "authorized_tools", "blocked_tools", "executed_tools", "policy_result", "policy_read_sets", "action"},
     "evaluator": {"scorers_passed", "scorers_total", "audit_event_id"},
 }
 
@@ -42,7 +42,21 @@ def test_swarm_trace_carries_enterprise_receipts():
         assert keys.issubset(receipt.keys()), f"{node} receipt missing keys: {keys - receipt.keys()}"
 
     resolution = by_node["resolution"]["receipt"]
-    assert resolution["tool_attempt"] == "refund_tool"
-    assert resolution["policy_result"] == "blocked"
-    assert resolution["authorization"] == "denied_after_attempt"
-    assert resolution.get("audit_event_id") is not None
+    execution = by_node["execution"]["receipt"]
+    assert resolution["proposed_tools"] == ["refund_tool"]
+    assert execution["blocked_tools"] == ["refund_tool"]
+    assert execution["executed_tools"] == []
+    assert execution["policy_result"] == "blocked"
+    assert execution.get("audit_event_id") is None
+
+
+def test_security_guard_executes_one_escalation_and_no_refund():
+    redis = MemoryRedis()
+    ledger = MemoryLedger()
+    seed_baseline(redis=redis, ledger=ledger)
+    redis.set_routing_rules([{"rule": "security_flag_blocks_refund"}])
+    run = run_ticket(tickets_by_id()["security_001"], redis=redis, ledger=ledger, mode="test")
+    execution = next(entry for entry in run["trace"] if entry.get("node") == "execution")["receipt"]
+    assert run["action"] == "escalate_security"
+    assert execution["executed_tools"] == ["escalate_tool"]
+    assert execution["blocked_tools"] == ["refund_tool"]

@@ -14,6 +14,8 @@ export function Tickets() {
     event.preventDefault(); setSaving(true); setError(null);
     const values = new FormData(event.currentTarget);
     const externalId = String(values.get("external_id"));
+    const amountText = String(values.get("amount") ?? "").trim();
+    const amountMinor = amountText === "" ? null : Math.round(Number(amountText) * 100);
     const response = await fetch("/api/loopie/v1/tickets", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -21,11 +23,13 @@ export function Tickets() {
         subject: values.get("subject"),
         body: values.get("body"),
         channel: "ui",
-        metadata: {
-          customer_tier: values.get("customer_tier") || "standard",
-          days_since_purchase: Number(values.get("days_since_purchase") || 0),
-          security_flag: values.get("security_flag") === "on",
-        },
+        customer_tier: values.get("customer_tier") || "standard",
+        days_since_purchase: Number(values.get("days_since_purchase") || 0),
+        security_flag: values.get("security_flag") === "on",
+        amount_minor: amountMinor,
+        currency: String(values.get("currency") || "USD").toUpperCase(),
+        amount_source: amountMinor == null ? "missing" : "explicit",
+        metadata: {},
         tags: ["support"], auto_evaluate: true,
       }),
     });
@@ -54,8 +58,10 @@ export function Tickets() {
         <label>External ID<input name="external_id" required defaultValue={`ticket-${Date.now()}`} /></label>
         <label>Subject<input name="subject" required placeholder="Refund request" /></label>
         <label className="wide">Message<textarea name="body" required placeholder="Customer message…" /></label>
-        <label>Customer tier<input name="customer_tier" defaultValue="standard" /></label>
+        <label>Customer tier<select name="customer_tier" defaultValue="standard"><option value="standard">standard</option><option value="enterprise">enterprise</option><option value="trial">trial</option></select></label>
         <label>Days since purchase<input name="days_since_purchase" type="number" min="0" defaultValue="0" /></label>
+        <label>Amount<input name="amount" type="number" min="0" step="0.01" placeholder="12450.00" /></label>
+        <label>Currency<input name="currency" defaultValue="USD" maxLength={3} /></label>
         <label><span>Security flag</span><input name="security_flag" type="checkbox" /></label>
         <button className="lp-button" disabled={saving}>{saving ? "Queuing…" : "Import and evaluate"}</button>
       </form>

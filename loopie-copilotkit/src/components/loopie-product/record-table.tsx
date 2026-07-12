@@ -1,12 +1,14 @@
 "use client";
 
+import Link from "next/link";
+
 function display(value: unknown): string {
   if (value == null) return "—";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
 
-export function RecordTable({ rows, columns }: { rows: Record<string, unknown>[]; columns: string[] }) {
+export function RecordTable({ rows, columns, linkPrefixes = {} }: { rows: Record<string, unknown>[]; columns: string[]; linkPrefixes?: Record<string, string> }) {
   if (!rows.length) return <div className="lp-empty">No records yet.</div>;
   return (
     <div className="lp-table-wrap">
@@ -17,7 +19,7 @@ export function RecordTable({ rows, columns }: { rows: Record<string, unknown>[]
             const value = row[column];
             const status = column === "status" ? String(value) : undefined;
             return <td key={column} className={column.endsWith("id") ? "lp-mono" : undefined}>
-              {status ? <span className="lp-pill" data-status={status}>{status}</span> : display(value)}
+              {status ? <span className="lp-pill" data-status={status}>{status}</span> : linkPrefixes[column] && value != null ? <Link href={`${linkPrefixes[column]}${String(value)}`}>{display(value)}</Link> : display(value)}
             </td>;
           })}</tr>
         ))}</tbody>

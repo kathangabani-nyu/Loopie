@@ -1,11 +1,14 @@
 # Local secrets — copy from loopie/.env.example or loopie-copilotkit/.env.example
 .env
+.env.*
 .env.local
 .env.*.local
 !.env.example
+!**/.env.example
 
 # Internal agent / editor config (local only)
 .agents/
+.codex/
 .cursor/
 .vscode/
 AGENTS.md
@@ -15,13 +18,34 @@ loopie-fallback-spec.md
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .venv/
 venv/
+.uv-cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.egg-info/
+
+# Local databases and process state
+*.db
+*.sqlite
+*.sqlite3
+*.pid
 
 # Node / Next.js
 node_modules/
 .next/
 out/
+.turbo/
+.eslintcache
 *.tsbuildinfo
 next-env.d.ts
 
@@ -29,12 +53,16 @@ next-env.d.ts
 .langgraph_api/
 .vercel/
 .DS_Store
+Thumbs.db
+Desktop.ini
 *.pem
 coverage/
 test-results/
+brag-output/
 
 # Debug logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log

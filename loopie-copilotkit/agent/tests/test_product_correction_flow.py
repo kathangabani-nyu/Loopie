@@ -34,7 +34,15 @@ async def _parts():
         body="Refund requested while account is security flagged.",
         channel="api",
         customer_ref="customer-1",
-        metadata={"security_flag": True, "days_since_purchase": 2, "customer_tier": "standard"},
+        facts={
+            "security_flag": True,
+            "days_since_purchase": 2,
+            "customer_tier": "standard",
+            "amount_minor": None,
+            "currency": "USD",
+            "amount_source": "missing",
+        },
+        metadata={},
         tags=["security"],
     )
     baseline = await runs.queue_ticket_run(
@@ -78,6 +86,14 @@ def test_approval_service_applies_projects_and_queues_linked_patched_run() -> No
         patched = await repository.get_run(result["patched_run"]["run_id"])
         assert patched["kind"] == "patched"
         assert patched["correction_id"] == prepared["id"]
+        baseline_manifest = await repository.get_run_manifest(baseline["run"]["manifest_id"])
+        patched_manifest = await repository.get_run_manifest(patched["manifest_id"])
+        assert baseline_manifest is not None and patched_manifest is not None
+        assert patched_manifest.id != baseline_manifest.id
+        assert patched_manifest.ticket_snapshot == baseline_manifest.ticket_snapshot
+        assert patched_manifest.ticket_content_hash == baseline_manifest.ticket_content_hash
+        assert patched_manifest.evaluation_snapshot == baseline_manifest.evaluation_snapshot
+        assert patched_manifest.scorer_version == baseline_manifest.scorer_version
         assert redis.get_routing_rules() == [prepared["proposal"]]
         assert ledger._memory_approvals[-1]["channel"] == "hitl_chat"
 
@@ -91,6 +107,8 @@ def test_approval_service_applies_projects_and_queues_linked_patched_run() -> No
         }
         patched_result = {
             "read_set": [],
+            "audit_payload": {"action": "escalate_security"},
+            "cost_events": [],
             "correctness": {
                 "policy": {"passed": True},
                 "structural": {"passed": True, "scores": {"action_in_taxonomy": True}},

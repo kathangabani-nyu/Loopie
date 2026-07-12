@@ -8,12 +8,22 @@ from typing import Any, Iterable
 
 _ACTION = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 
+ACTION_ALIASES: dict[str, str] = {"block_refund_tool": "escalate_security"}
+
+_ACTION_EFFECT_TOOLS: dict[str, frozenset[str]] = {
+    "approve_refund": frozenset({"refund_tool"}),
+    "deny_refund_offer_credit": frozenset({"crm_lookup"}),
+    "escalate_security": frozenset({"escalate_tool"}),
+    "require_security_review": frozenset({"escalate_tool"}),
+    "escalate_billing_review": frozenset({"escalate_tool"}),
+    "escalate_after_loop": frozenset({"escalate_tool"}),
+}
+
 DEFAULT_ACTIONS: tuple[str, ...] = tuple(
     sorted(
         {
             "approve_refund",
             "ask_clarification",
-            "block_refund_tool",
             "block_unauthorized_refund",
             "check_enterprise_override",
             "deny_refund_offer_credit",
@@ -48,3 +58,13 @@ def parse_taxonomy(value: Any) -> tuple[str, ...]:
     if not isinstance(value, list):
         raise ValueError("action taxonomy artifact must be a JSON array")
     return validate_taxonomy(value)
+
+
+def normalize_action(action: str) -> str:
+    """Normalize retired action names from pinned pre-migration manifests."""
+    return ACTION_ALIASES.get(action, action)
+
+
+def allowed_effect_tools(action: str) -> frozenset[str]:
+    """Return the deterministic effect boundary for an action."""
+    return _ACTION_EFFECT_TOOLS.get(normalize_action(action), frozenset())

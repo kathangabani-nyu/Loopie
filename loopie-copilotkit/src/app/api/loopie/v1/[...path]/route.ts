@@ -41,3 +41,4 @@ async function proxy(
 
 export const GET = proxy;
 export const POST = proxy;
+export const maxDuration = 120;

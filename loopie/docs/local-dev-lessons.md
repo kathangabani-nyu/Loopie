@@ -51,7 +51,7 @@ Brief postmortem from the first local run of `loopie-copilotkit/`. Use this to a
 |---|---|---|
 | **Chat vs App mode** | Loopie cockpit (Seed, Baseline, …) lives in the **App** panel; in **Chat** mode the panel is `w-0` (~48px) — buttons exist in DOM but don’t behave | Default to App mode for Loopie work; document the top-right **Chat / App** toggle |
 | **`npm run dev` ≠ full stack** | `npm run dev` starts UI + LangGraph only; cockpit calls `/api/loopie/*` → `localhost:8001` | Always run `npm run dev:loopie` in a second terminal; gate UI with a clear error if `:8001` is down |
-| **Silent failures** | Cockpit swallowed API errors; panels stayed empty | Show status/errors in UI; check `curl http://localhost:8001/health` |
+| **Silent failures** | Cockpit swallowed API errors; panels stayed empty | Show status/errors in UI; check `curl http://localhost:8001/healthz` |
 | **State / events bug** | `export_state()` only read `swarm` + `corrections` streams, not `evals` — Seed looked like it did nothing | Merge all Redis event streams (`evals`, `swarm`, `corrections`) when exporting cockpit state |
 
 ---

@@ -16,6 +16,7 @@ from src.loopie.manifests import (
     DEFAULT_PROJECT_ID,
     ArtifactSnapshot,
     RunManifest,
+    snapshot_content_hash,
 )
 
 FORBIDDEN_LIVE_TICKET_KEYS = frozenset(
@@ -83,22 +84,31 @@ def _attach_improvement_proof(
 
 def ticket_to_agent_input(ticket: dict[str, Any]) -> dict[str, Any]:
     """Build the live decision input without ever joining golden annotations."""
-    metadata = {
-        key: value
-        for key, value in dict(ticket.get("metadata") or {}).items()
-        if key not in FORBIDDEN_LIVE_TICKET_KEYS
-    }
+    facts = dict(ticket.get("facts") or {})
+    legacy = dict(ticket.get("metadata") or {})
+    for key in (
+        "customer_tier", "days_since_purchase", "security_flag", "amount_minor",
+        "currency", "amount_source", "amount", "must_check_policy_version",
+    ):
+        if key not in facts and key in legacy:
+            facts[key] = legacy[key]
+    if facts.get("amount_minor") is not None and "amount" not in facts:
+        facts["amount"] = int(facts["amount_minor"]) / 100
+    if facts.get("amount") is not None and facts.get("amount_minor") is None:
+        facts["amount_minor"] = round(float(facts["amount"]) * 100)
+        facts.setdefault("currency", "USD")
+        facts.setdefault("amount_source", "explicit")
     return {
-        "case_id": ticket["external_id"],
+        "case_id": str(ticket.get("external_id") or ticket.get("case_id")),
         "version": int(ticket.get("version", 1)),
-        "request": ticket["body"],
-        **metadata,
+        "request": str(ticket.get("body") or ticket.get("request") or ""),
+        **facts,
     }
 
 
 class ProductRepository(Protocol):
     async def get_project(self, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any] | None: ...
-    async def create_ticket(self, *, external_id: str, subject: str, body: str, channel: str, customer_ref: str | None, metadata: dict[str, Any], tags: list[str], project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any]: ...
+    async def create_ticket(self, *, external_id: str, subject: str, body: str, channel: str, customer_ref: str | None, facts: dict[str, Any], metadata: dict[str, Any], tags: list[str], project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any]: ...
     async def list_tickets(self, *, project_id: str = DEFAULT_PROJECT_ID, limit: int = 100) -> list[dict[str, Any]]: ...
     async def get_ticket(self, ticket_id: str, *, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any] | None: ...
     async def get_golden_annotation(self, ticket_id: str, *, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any] | None: ...
@@ -115,7 +125,7 @@ class ProductRepository(Protocol):
     async def get_run_manifest(self, manifest_id: str, *, project_id: str = DEFAULT_PROJECT_ID) -> RunManifest | None: ...
     async def mark_run_running(self, run_id: str) -> None: ...
     async def mark_run_queued(self, run_id: str, error: str) -> None: ...
-    async def finish_run(self, run_id: str, result: dict[str, Any]) -> None: ...
+    async def finish_run(self, run_id: str, result: dict[str, Any], *, job_id: str | None = None, lease_token: str | None = None) -> None: ...
     async def fail_run(self, run_id: str, error: str) -> None: ...
 
 
@@ -124,6 +134,10 @@ def _manifest_columns(manifest: RunManifest) -> dict[str, Any]:
     return {
         "id": manifest.id,
         "ticket_version": manifest.ticket_version,
+        "ticket_snapshot": manifest.ticket_snapshot,
+        "ticket_content_hash": manifest.ticket_content_hash,
+        "evaluation_snapshot": manifest.evaluation_snapshot,
+        "scorer_version": manifest.scorer_version,
         "artifact_contents": {
             item["key"]: item["value"] for item in record["artifacts"]
         },
@@ -158,11 +172,22 @@ def _manifest_from_row(row: dict[str, Any]) -> RunManifest:
     for item in artifacts:
         if item.content_hash != hashes[item.key]["content_hash"]:
             raise RuntimeError(f"Manifest artifact hash mismatch for {item.key}")
+    ticket_snapshot = dict(row["ticket_snapshot"])
+    if row["ticket_content_hash"] != "legacy-unverified" and (
+        snapshot_content_hash(ticket_snapshot) != row["ticket_content_hash"]
+    ):
+        raise RuntimeError("Manifest ticket snapshot hash mismatch")
     return RunManifest(
         id=str(row["id"]),
         project_id=str(row["project_id"]),
         ticket_id=str(row["external_id"]),
         ticket_version=int(row["ticket_version"]),
+        ticket_snapshot=ticket_snapshot,
+        ticket_content_hash=str(row["ticket_content_hash"]),
+        evaluation_snapshot=(
+            dict(row["evaluation_snapshot"]) if row.get("evaluation_snapshot") else None
+        ),
+        scorer_version=str(row["scorer_version"]),
         artifacts=artifacts,
         prompt_version=str(row["prompt_versions"]["decision"]),
         schema_version=str(row["schema_versions"]["decision"]),
@@ -192,6 +217,7 @@ class PostgresProductRepository:
         body: str,
         channel: str = "api",
         customer_ref: str | None = None,
+        facts: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
         tags: list[str] | None = None,
         project_id: str = DEFAULT_PROJECT_ID,
@@ -201,13 +227,13 @@ class PostgresProductRepository:
                 result = await cursor.execute(
                     """
                     INSERT INTO loopie.tickets
-                        (id, project_id, external_id, subject, body, channel, customer_ref, metadata, tags)
+                        (id, project_id, external_id, subject, body, channel, customer_ref, facts, metadata, tags)
                     VALUES (%(id)s, %(project_id)s, %(external_id)s, %(subject)s, %(body)s,
-                            %(channel)s, %(customer_ref)s, %(metadata)s::jsonb, %(tags)s)
+                            %(channel)s, %(customer_ref)s, %(facts)s::jsonb, %(metadata)s::jsonb, %(tags)s)
                     ON CONFLICT (project_id, external_id) DO UPDATE
                     SET subject = EXCLUDED.subject, body = EXCLUDED.body,
                         channel = EXCLUDED.channel, customer_ref = EXCLUDED.customer_ref,
-                        metadata = EXCLUDED.metadata,
+                        facts = EXCLUDED.facts, metadata = EXCLUDED.metadata,
                         tags = EXCLUDED.tags, version = loopie.tickets.version + 1,
                         updated_at = NOW()
                     RETURNING *
@@ -220,6 +246,7 @@ class PostgresProductRepository:
                         "body": body,
                         "channel": channel,
                         "customer_ref": customer_ref,
+                        "facts": json.dumps(facts or {}),
                         "metadata": json.dumps(metadata or {}),
                         "tags": tags or [],
                     },
@@ -321,13 +348,16 @@ class PostgresProductRepository:
                     INSERT INTO loopie.run_manifests
                         (id, project_id, ticket_id, ticket_version, artifact_contents,
                          artifact_hashes, prompt_versions, schema_versions, model_config,
-                         tool_versions, code_version, content_hash, created_at)
+                         tool_versions, code_version, content_hash, ticket_snapshot,
+                         ticket_content_hash, evaluation_snapshot, scorer_version, created_at)
                     VALUES
                         (%(id)s, %(project_id)s, %(ticket_id)s, %(ticket_version)s,
                          %(artifact_contents)s::jsonb, %(artifact_hashes)s::jsonb,
                          %(prompt_versions)s::jsonb, %(schema_versions)s::jsonb,
                          %(model_config)s::jsonb, %(tool_versions)s::jsonb,
-                         %(code_version)s, %(content_hash)s, %(created_at)s)
+                         %(code_version)s, %(content_hash)s, %(ticket_snapshot)s::jsonb,
+                         %(ticket_content_hash)s, %(evaluation_snapshot)s::jsonb,
+                         %(scorer_version)s, %(created_at)s)
                     ON CONFLICT (id) DO NOTHING
                     """,
                     {
@@ -335,7 +365,7 @@ class PostgresProductRepository:
                         "project_id": project_id,
                         "ticket_id": str(ticket["id"]),
                         **{
-                            key: json.dumps(columns[key])
+                            key: json.dumps(columns[key], default=str)
                             for key in (
                                 "artifact_contents",
                                 "artifact_hashes",
@@ -343,6 +373,8 @@ class PostgresProductRepository:
                                 "schema_versions",
                                 "model_config",
                                 "tool_versions",
+                                "ticket_snapshot",
+                                "evaluation_snapshot",
                             )
                         },
                     },
@@ -394,7 +426,30 @@ class PostgresProductRepository:
         async with self.pool.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cursor:
                 result = await cursor.execute(
-                    "SELECT * FROM loopie.runs WHERE id = %s AND project_id = %s",
+                    """
+                    SELECT run.*,
+                           manifest.ticket_snapshot,
+                           audit.id AS audit_event_id,
+                           COALESCE(cost.total_tokens, 0) AS total_tokens,
+                           COALESCE(cost.estimated_cost, 0) AS estimated_cost,
+                           CASE
+                               WHEN run.decision IS NULL THEN 'pending'
+                               WHEN COALESCE((run.decision->'correctness'->>'passed')::boolean, FALSE)
+                               THEN 'passed' ELSE 'failed'
+                           END AS evaluation_status
+                    FROM loopie.runs AS run
+                    LEFT JOIN loopie.run_manifests AS manifest ON manifest.id = run.manifest_id
+                    LEFT JOIN LATERAL (
+                        SELECT id FROM loopie.audit_events
+                        WHERE run_id = run.id ORDER BY id DESC LIMIT 1
+                    ) AS audit ON TRUE
+                    LEFT JOIN LATERAL (
+                        SELECT COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                               COALESCE(SUM(estimated_cost), 0) AS estimated_cost
+                        FROM loopie.cost_ledger WHERE run_uuid = run.id
+                    ) AS cost ON TRUE
+                    WHERE run.id = %s AND run.project_id = %s
+                    """,
                     (run_id, project_id),
                 )
                 row = await result.fetchone()
@@ -610,9 +665,30 @@ class PostgresProductRepository:
                 (error[:2000], run_id),
             )
 
-    async def finish_run(self, run_id: str, result: dict[str, Any]) -> None:
+    async def finish_run(
+        self,
+        run_id: str,
+        result: dict[str, Any],
+        *,
+        job_id: str | None = None,
+        lease_token: str | None = None,
+    ) -> None:
         async with self.pool.connection() as conn:
             async with conn.transaction():
+                if job_id and lease_token:
+                    lease = await (
+                        await conn.execute(
+                            """
+                            SELECT id FROM loopie.jobs
+                            WHERE id = %s AND status = 'running' AND lease_token = %s
+                              AND lease_expires_at > NOW()
+                            FOR UPDATE
+                            """,
+                            (job_id, lease_token),
+                        )
+                    ).fetchone()
+                    if lease is None:
+                        raise RuntimeError("Job lease was lost before run finalization")
                 run_row = await (
                     await conn.execute(
                         """
@@ -630,6 +706,55 @@ class PostgresProductRepository:
                 if not run_row:
                     raise KeyError(f"Unknown run {run_id}")
                 project_id = str(run_row["project_id"] if isinstance(run_row, dict) else run_row[0])
+                audit_payload = dict(result.pop("audit_payload", {}) or {})
+                if not audit_payload:
+                    raise RuntimeError("Run completed without an audit payload")
+                audit_row = await (
+                    await conn.execute(
+                        """
+                        INSERT INTO loopie.audit_events (project_id, run_id, event_type, payload)
+                        VALUES (%s, %s, 'swarm_resolution', %s::jsonb)
+                        RETURNING id
+                        """,
+                        (project_id, run_id, json.dumps(audit_payload)),
+                    )
+                ).fetchone()
+                if audit_row is None:
+                    raise RuntimeError("Audit event insert returned no receipt")
+                audit_event_id = int(audit_row["id"])
+                result["audit_event_id"] = audit_event_id
+                for entry in result.get("trace", []):
+                    if entry.get("node") in {"resolution", "execution", "evaluator"}:
+                        entry.setdefault("receipt", {})["audit_event_id"] = audit_event_id
+                for index, cost in enumerate(result.pop("cost_events", []) or []):
+                    await conn.execute(
+                        """
+                        INSERT INTO loopie.cost_ledger
+                            (project_id, run_uuid, run_id, provider, model, prompt_tokens,
+                             completion_tokens, total_tokens, estimated_cost, stop_reason,
+                             mode, operation, cache_hit, event_key)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (event_key) WHERE event_key IS NOT NULL DO NOTHING
+                        """,
+                        (
+                            project_id,
+                            run_id,
+                            run_id,
+                            cost.get("provider"),
+                            cost.get("model"),
+                            int(cost.get("prompt_tokens", 0)),
+                            int(cost.get("completion_tokens", 0)),
+                            int(cost.get("total_tokens", 0)),
+                            float(cost.get("estimated_cost", 0)),
+                            cost.get("stop_reason"),
+                            cost.get("mode", run_row["mode"]),
+                            cost.get("operation", "unknown"),
+                            bool(cost.get("cache_hit", False)),
+                            f"{run_id}:{index}:{cost.get('operation', 'unknown')}",
+                        ),
+                    )
+                weave = dict(result.get("weave") or {})
+                result["evidence_status"] = "complete" if weave.get("dashboard_url") else "incomplete"
                 proof = _attach_improvement_proof(
                     result,
                     parent_decision=run_row.get("parent_decision"),
@@ -653,10 +778,19 @@ class PostgresProductRepository:
                 await conn.execute(
                     """
                     UPDATE loopie.runs
-                    SET status = 'succeeded', decision = %s::jsonb, finished_at = NOW(), error = NULL
+                    SET status = 'succeeded', decision = %s::jsonb, finished_at = NOW(), error = NULL,
+                        weave_call_id = %s, weave_trace_id = %s, weave_url = %s,
+                        evidence_status = %s
                     WHERE id = %s
                     """,
-                    (json.dumps(result), run_id),
+                    (
+                        json.dumps(result),
+                        weave.get("call_id"),
+                        weave.get("trace_id"),
+                        weave.get("dashboard_url"),
+                        result["evidence_status"],
+                        run_id,
+                    ),
                 )
                 correctness = result.get("correctness") or {"passed": True}
                 eval_run_id = f"continuous:{run_id}"
@@ -757,6 +891,18 @@ class PostgresProductRepository:
                         """,
                         (run_row["correction_id"],),
                     )
+                if job_id and lease_token:
+                    completed = await conn.execute(
+                        """
+                        UPDATE loopie.jobs
+                        SET status = 'succeeded', lease_owner = NULL, lease_token = NULL,
+                            lease_expires_at = NULL, heartbeat_at = NOW()
+                        WHERE id = %s AND status = 'running' AND lease_token = %s
+                        """,
+                        (job_id, lease_token),
+                    )
+                    if completed.rowcount != 1:
+                        raise RuntimeError("Job lease was lost during run finalization")
 
     async def fail_run(self, run_id: str, error: str) -> None:
         async with self.pool.connection() as conn:
@@ -869,7 +1015,7 @@ class MemoryProductRepository:
             "settings": {},
         }
 
-    async def create_ticket(self, *, external_id: str, subject: str, body: str, channel: str = "api", customer_ref: str | None = None, metadata: dict[str, Any] | None = None, tags: list[str] | None = None, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any]:
+    async def create_ticket(self, *, external_id: str, subject: str, body: str, channel: str = "api", customer_ref: str | None = None, facts: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None, tags: list[str] | None = None, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any]:
         existing = next((item for item in self.tickets.values() if item["project_id"] == project_id and item["external_id"] == external_id), None)
         ticket_id = existing["id"] if existing else str(uuid.uuid4())
         row = {
@@ -881,6 +1027,7 @@ class MemoryProductRepository:
             "body": body,
             "channel": channel,
             "customer_ref": customer_ref,
+            "facts": facts or {},
             "metadata": metadata or {},
             "tags": tags or [],
             "created_at": existing["created_at"] if existing else _utcnow(),
@@ -1024,8 +1171,25 @@ class MemoryProductRepository:
     async def mark_run_queued(self, run_id: str, error: str) -> None:
         self.runs[run_id].update(status="queued", error=error[:2000])
 
-    async def finish_run(self, run_id: str, result: dict[str, Any]) -> None:
+    async def finish_run(
+        self,
+        run_id: str,
+        result: dict[str, Any],
+        *,
+        job_id: str | None = None,
+        lease_token: str | None = None,
+    ) -> None:
         run = self.runs[run_id]
+        if not result.pop("audit_payload", None):
+            raise RuntimeError("Run completed without an audit payload")
+        result.pop("cost_events", None)
+        result["audit_event_id"] = 1
+        for entry in result.get("trace", []):
+            if entry.get("node") in {"resolution", "execution", "evaluator"}:
+                entry.setdefault("receipt", {})["audit_event_id"] = 1
+        result["evidence_status"] = (
+            "complete" if (result.get("weave") or {}).get("dashboard_url") else "incomplete"
+        )
         parent = self.runs.get(str(run.get("parent_run_id"))) if run.get("parent_run_id") else None
         proof = _attach_improvement_proof(
             result,

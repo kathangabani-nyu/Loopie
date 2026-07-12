@@ -49,6 +49,12 @@ class ApprovalService:
         if failure_id:
             failure = await self.runs.repository.get_failure(str(failure_id))
             if failure is not None:
+                parent = await self.runs.repository.get_run(str(failure["run_id"]))
+                parent_manifest = (
+                    await self.runs.repository.get_run_manifest(str(parent["manifest_id"]))
+                    if parent is not None and parent.get("manifest_id")
+                    else None
+                )
                 queued = await self.runs.queue_ticket_run(
                     ticket_id=str(failure["ticket_id"]),
                     mode=str(failure["mode"]),
@@ -56,6 +62,8 @@ class ApprovalService:
                     idempotency_key=f"correction:{correction_id}:patched",
                     parent_run_id=str(failure["run_id"]),
                     correction_id=correction_id,
+                    ticket_snapshot=(parent_manifest.ticket_snapshot if parent_manifest else None),
+                    evaluation_snapshot=(parent_manifest.evaluation_snapshot if parent_manifest else None),
                 )
                 patched_run = {
                     "run_id": queued["run"]["id"],

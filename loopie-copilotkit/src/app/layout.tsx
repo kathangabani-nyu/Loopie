@@ -1,17 +1,11 @@
-"use client";
-
 import "./globals.css";
 import "@copilotkit/react-core/v2/styles.css";
 
-import { CopilotKit } from "@copilotkit/react-core/v2";
-import { usePathname } from "next/navigation";
 import { ThemeProvider } from "@/hooks/use-theme";
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const pathname = usePathname();
-
   return (
     <html lang="en">
       <head>
@@ -20,16 +14,7 @@ export default function RootLayout({
       </head>
       <body className={`antialiased`}>
         <ThemeProvider>
-          {pathname === "/login" ? children : (
-            <CopilotKit
-              runtimeUrl="/api/copilotkit"
-              agent="loopie_control"
-              showDevConsole={false}
-              useSingleEndpoint={false}
-            >
-              {children}
-            </CopilotKit>
-          )}
+          {children}
         </ThemeProvider>
       </body>
     </html>
