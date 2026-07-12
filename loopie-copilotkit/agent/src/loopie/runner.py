@@ -21,6 +21,15 @@ from src.loopie.swarm import SWARM_NODE_ORDER, graph
 DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
+def _run_display_name(call: Any) -> str:
+    inputs = getattr(call, "inputs", {}) or {}
+    ticket = inputs.get("ticket") or {}
+    case_id = str(ticket.get("case_id", "ticket"))
+    mode = str(inputs.get("mode") or "default")
+    run_id = str(inputs.get("run_id") or "")[:8]
+    return f"{case_id} · {mode} · {run_id}"
+
+
 def load_tickets(limit: int | None = None) -> list[dict[str, Any]]:
     tickets: list[dict[str, Any]] = []
     for line in (DATA_DIR / "tickets.jsonl").read_text(encoding="utf-8").splitlines():
@@ -39,7 +48,7 @@ def tickets_by_id(limit: int | None = None) -> dict[str, dict[str, Any]]:
     return {t["case_id"]: t for t in load_tickets(limit=limit)}
 
 
-@op("run_ticket")
+@op("loopie.run", call_display_name=_run_display_name)
 def _execute_run(
     ticket: dict[str, Any],
     *,

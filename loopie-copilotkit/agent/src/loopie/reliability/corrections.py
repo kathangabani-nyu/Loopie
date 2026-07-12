@@ -220,6 +220,13 @@ def _candidate_manifest(manifest: RunManifest, artifact_key: str, candidate: Any
     return replace(manifest, id=str(uuid.uuid4()), artifacts=tuple(snapshots))
 
 
+def _shadow_display_name(call: Any) -> str:
+    inputs = getattr(call, "inputs", {}) or {}
+    correction = inputs.get("correction") or {}
+    return f"Shadow gate · {correction.get('case_id', 'correction')}"
+
+
+@op("golden_demo.shadow_gate", call_display_name=_shadow_display_name)
 def shadow_evaluate_correction(
     correction: dict[str, Any],
     *,
