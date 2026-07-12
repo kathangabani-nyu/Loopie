@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
+import uuid
 
 import pytest
 
@@ -42,6 +44,32 @@ def test_committed_artifact_survives_projection_crash_and_reconciles() -> None:
     projected = project_pending_outbox(ledger=ledger, redis=redis)
     assert projected[0]["artifact_key"] == "routing:rules"
     assert redis.get_routing_rules() == [correction["proposal"]]
+    assert ledger.pending_outbox() == []
+
+
+def test_raw_config_outbox_from_v3_self_heals_during_projection() -> None:
+    redis, ledger = _stores()
+    taxonomy = ["approve_refund", "escalate_security"]
+    ledger._memory_outbox.append(
+        {
+            "id": str(uuid.uuid4()),
+            "project_id": "00000000-0000-0000-0000-000000000001",
+            "correction_id": None,
+            "artifact_key": "config:action_taxonomy",
+            "version": 2,
+            "value": taxonomy,
+            "projected_at": None,
+        }
+    )
+
+    projected = project_pending_outbox(ledger=ledger, redis=redis)
+
+    assert projected[0]["artifact_key"] == "config:action_taxonomy"
+    assert json.loads(redis.get_config("action_taxonomy") or "[]") == taxonomy
+    assert redis.get_artifact_doc("config:action_taxonomy")["value"] == {
+        "key": "action_taxonomy",
+        "value": taxonomy,
+    }
     assert ledger.pending_outbox() == []
 
 

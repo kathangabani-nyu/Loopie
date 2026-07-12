@@ -324,7 +324,16 @@ def project_pending_outbox(*, ledger: Ledger, redis: RedisStore, limit: int = 10
         elif artifact_key.startswith("memory:"):
             redis.set_memory(value["key"], value["value"], version=int(value["version"]))
         elif artifact_key.startswith("config:"):
-            redis.set_config(value["key"], value["value"])
+            config_key = artifact_key.removeprefix("config:")
+            if isinstance(value, dict) and "key" in value and "value" in value:
+                config_key = str(value["key"])
+                config_value = value["value"]
+            else:
+                # Migration 20260712_0003 briefly emitted a raw config value.
+                # Accept that durable row so startup reconciliation can self-heal.
+                config_value = value
+                value = {"key": config_key, "value": config_value}
+            redis.set_config(config_key, config_value)
         else:
             raise ValueError(f"unsupported artifact projection key {artifact_key}")
         redis.set_artifact_doc(
