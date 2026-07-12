@@ -59,6 +59,13 @@ class LoopieSettings:
     weave_project: str
     weave_enabled: bool
     openai_model: str
+    api_token: str
+    ui_origin: str
+    enable_admin_reset: bool
+    judge_enabled: bool
+    judge_model: str
+    judge_min_calibration: float
+    allow_insecure_redis: bool
 
     @property
     def is_test(self) -> bool:
@@ -91,5 +98,12 @@ def get_settings() -> LoopieSettings:
         ),
         weave_project=os.getenv("WEAVE_PROJECT", "loopie"),
         weave_enabled=_env_bool("LOOPIE_WEAVE_ENABLED", False),
-        openai_model=os.getenv("LOOPIE_OPENAI_MODEL", "gpt-4o-mini"),
+        openai_model=os.getenv("LOOPIE_OPENAI_MODEL", "gpt-5.6-luna"),
+        api_token=os.getenv("LOOPIE_API_TOKEN", ""),
+        ui_origin=os.getenv("LOOPIE_UI_ORIGIN", "http://localhost:3000"),
+        enable_admin_reset=_env_bool("LOOPIE_ENABLE_ADMIN_RESET", False),
+        judge_enabled=_env_bool("LOOPIE_JUDGE_ENABLED", False),
+        judge_model=os.getenv("LOOPIE_JUDGE_MODEL", "gpt-5.6-terra"),
+        judge_min_calibration=_env_float("LOOPIE_JUDGE_MIN_CALIBRATION", 0.8),
+        allow_insecure_redis=_env_bool("LOOPIE_ALLOW_INSECURE_REDIS", False),
     )

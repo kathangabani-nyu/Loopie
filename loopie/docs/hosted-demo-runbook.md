@@ -65,7 +65,7 @@ Deploy via Blueprint: `render.yaml` at repo root. Service `loopie-api` uses `roo
 | `WEAVE_PROJECT` | yes | `loopie` |
 | `OPENAI_API_KEY` | test: no | Only for live rehearsal (`LOOPIE_LLM_MODE=live`) |
 
-**Start:** `uv run uvicorn loopie_server:app --host 0.0.0.0 --port $PORT`  
+**Start:** `uvicorn loopie_server:app --host 0.0.0.0 --port $PORT`
 **Health:** `GET /health`
 
 ### Render — `loopie-agent` (LangGraph live chat)

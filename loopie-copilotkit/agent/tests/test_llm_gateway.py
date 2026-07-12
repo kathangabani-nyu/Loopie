@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from src.loopie.config import get_settings
-from src.loopie.llm import LLMGateway
+from src.loopie.llm import LLMGateway, LiveDecisionUnavailable
 from src.loopie.providers import cursor_smoke_verified, write_cursor_smoke_marker
 from src.loopie.reliability.budget import BudgetTracker
 
@@ -19,19 +19,19 @@ def live_mode(monkeypatch):
     get_settings.cache_clear()
 
 
-def test_oracle_fallback_does_not_crash_without_provider_name_in_scope(monkeypatch):
+def test_budget_exhaustion_fails_live_decision_instead_of_using_oracle(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     get_settings.cache_clear()
 
-    gateway = LLMGateway(budget=BudgetTracker(), ledger=None)
-    result = gateway._oracle_fallback(
-        oracle_action="escalate_security",
-        artifacts={"routing_rules": [], "memory": {}},
+    budget = BudgetTracker(budget_guard_triggered=True, stop_reason="max_estimated_cost_usd")
+    gateway = LLMGateway(budget=budget, ledger=None)
+    with pytest.raises(LiveDecisionUnavailable, match="budget exhausted"):
+        gateway._live_decision(
+        ticket={"case_id": "live-1", "request": "refund"},
+        artifacts={"routing_rules": [], "memory": {}, "action_taxonomy": ["escalate_security"]},
         fixture_id="security_001",
-        stop_reason="test",
-    )
-    assert result.decided_by == "oracle_fallback"
-    assert result.fallback_used is True
+        artifact_version="v1",
+        )
 
 
 def test_live_decision_requires_any_enabled_provider_not_only_openai(monkeypatch):

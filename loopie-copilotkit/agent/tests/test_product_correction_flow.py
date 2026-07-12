@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime
+
+import pytest
+from pydantic import ValidationError
+
+from src.loopie.jobs import MemoryJobStore
+from src.loopie.product_repository import MemoryProductRepository
+from src.loopie.reliability.correction_gen import validate_generated_correction
+from src.loopie.reliability.corrections import prepare_correction, propose
+from src.loopie.runner import seed_baseline
+from src.loopie.services.approvals import ApprovalService
+from src.loopie.services.runs import RunService
+
+from memory_stores import MemoryLedger, MemoryRedis
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+async def _parts():
+    redis = MemoryRedis()
+    ledger = MemoryLedger()
+    seed_baseline(redis=redis, ledger=ledger)
+    repository = MemoryProductRepository()
+    jobs = MemoryJobStore()
+    runs = RunService(repository=repository, jobs=jobs, redis=redis, ledger=ledger)
+    ticket = await repository.create_ticket(
+        external_id="novel-security-ticket",
+        subject="Security hold",
+        body="Refund requested while account is security flagged.",
+        channel="api",
+        customer_ref="customer-1",
+        metadata={"security_flag": True, "days_since_purchase": 2, "customer_tier": "standard"},
+        tags=["security"],
+    )
+    baseline = await runs.queue_ticket_run(
+        ticket_id=ticket["id"],
+        mode="test",
+        kind="ticket",
+        idempotency_key="baseline",
+    )
+    failure_id = "00000000-0000-0000-0000-000000000099"
+    repository.failures[failure_id] = {
+        "id": failure_id,
+        "project_id": ticket["project_id"],
+        "run_id": baseline["run"]["id"],
+        "ticket_id": ticket["id"],
+        "category": "missing_guard",
+        "layer": "policy",
+        "diagnosis": {},
+        "status": "open",
+        "created_at": datetime.now(UTC),
+    }
+    return redis, ledger, repository, jobs, runs, ticket, baseline, failure_id
+
+
+def test_approval_service_applies_projects_and_queues_linked_patched_run() -> None:
+    async def scenario():
+        redis, ledger, repository, _, runs, _, baseline, failure_id = await _parts()
+        correction = propose("missing_guard", case_id="novel-security-ticket")
+        correction["failure_id"] = failure_id
+        prepared = prepare_correction(
+            correction,
+            ledger=ledger,
+            shadow_passed=True,
+            shadow_eval_run_id="shadow-pass",
+        )
+        service = ApprovalService(ledger=ledger, redis=redis, runs=runs)
+        result = await service.approve(
+            prepared["id"], actor="owner", channel="hitl_chat", note="approved in test"
+        )
+
+        assert result["patched_run"]["parent_run_id"] == baseline["run"]["id"]
+        patched = await repository.get_run(result["patched_run"]["run_id"])
+        assert patched["kind"] == "patched"
+        assert patched["correction_id"] == prepared["id"]
+        assert redis.get_routing_rules() == [prepared["proposal"]]
+        assert ledger._memory_approvals[-1]["channel"] == "hitl_chat"
+
+        repository.runs[baseline["run"]["id"]]["decision"] = {
+            "correctness": {
+                "policy": {"passed": False},
+                "structural": {"passed": True, "scores": {"action_in_taxonomy": True}},
+                "golden": None,
+                "passed": False,
+            }
+        }
+        patched_result = {
+            "read_set": [],
+            "correctness": {
+                "policy": {"passed": True},
+                "structural": {"passed": True, "scores": {"action_in_taxonomy": True}},
+                "golden": None,
+                "passed": True,
+            },
+        }
+        await repository.finish_run(patched["id"], patched_result)
+        assert patched_result["improvement_proof"]["improvement_proven"] is True
+        assert repository.failures[failure_id]["status"] == "corrected"
+
+    _run(scenario())
+
+
+def test_rejection_records_decision_without_mutating_artifacts() -> None:
+    async def scenario():
+        redis, ledger, _, _, runs, _, _, failure_id = await _parts()
+        correction = propose("missing_guard", case_id="novel-security-ticket")
+        correction["failure_id"] = failure_id
+        prepared = prepare_correction(
+            correction,
+            ledger=ledger,
+            shadow_passed=True,
+            shadow_eval_run_id="shadow-pass",
+        )
+        service = ApprovalService(ledger=ledger, redis=redis, runs=runs)
+        result = await service.reject(prepared["id"], actor="owner", channel="ui")
+        assert result["status"] == "rejected"
+        assert redis.get_routing_rules() == []
+        assert ledger.get_correction(prepared["id"])["status"] == "rejected"
+
+    _run(scenario())
+
+
+def test_generated_correction_union_rejects_unsafe_policy_paths() -> None:
+    with pytest.raises(ValidationError):
+        validate_generated_correction(
+            {
+                "rationale": "A proposed rule is needed for this failure.",
+                "correction": {
+                    "kind": "policy_rule",
+                    "summary": "Block the unsafe action deterministically.",
+                    "rule": {
+                        "schema_version": "1",
+                        "rule_id": "unsafe_generated_rule",
+                        "version": 1,
+                        "status": "proposed",
+                        "name": "Unsafe generated rule",
+                        "when": {
+                            "kind": "predicate",
+                            "path": "system.secrets",
+                            "operator": "exists",
+                            "value": True,
+                        },
+                        "effects": [
+                            {
+                                "kind": "escalate_to",
+                                "action": "escalate_security",
+                                "message": "Escalate this ticket.",
+                            }
+                        ],
+                    },
+                },
+            }
+        )
+
+
+def test_redis_product_stream_resumes_after_last_event_id() -> None:
+    redis = MemoryRedis()
+    first = redis.xadd("product", {"event": "run.queued", "data": {"run_id": "one"}})
+    redis.xadd("product", {"event": "run.finished", "data": {"run_id": "one"}})
+    rows = redis.xread("product", last_id=first)
+    assert [row["event"] for row in rows] == ["run.finished"]

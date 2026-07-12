@@ -1,12 +1,10 @@
 """Full test pipeline integration test."""
 
-import os
-
 import pytest
 
-pytestmark = pytest.mark.integration
-
 from src.loopie.config import get_settings
+
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(autouse=True)

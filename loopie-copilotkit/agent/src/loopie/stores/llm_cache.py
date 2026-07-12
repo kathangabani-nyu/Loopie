@@ -26,15 +26,20 @@ def cache_key(
     )
 
 
-def get_cached(key: str) -> str | None:
+def get_cached(key: str, store: Any | None = None) -> str | None:
     if not get_settings().enable_replay_cache:
         return None
+    if store is not None:
+        return store.get_llm_cache(key)
     return _CACHE.get(key)
 
 
-def set_cached(key: str, value: str) -> None:
+def set_cached(key: str, value: str, store: Any | None = None) -> None:
     if get_settings().enable_replay_cache:
-        _CACHE[key] = value
+        if store is not None:
+            store.set_llm_cache(key, value)
+        else:
+            _CACHE[key] = value
 
 
 def clear_cache() -> None:

@@ -1,4 +1,4 @@
-"""Deterministic swarm tools with structured receipts."""
+"""Deterministic swarm tools with Policy DSL authorization receipts."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from typing import Any
 
 from src.loopie.artifacts import artifact_value_hash
 from src.loopie.decide import _has_rule
+from src.loopie.policy.dsl import evaluate_policy, parse_policy_rule
 
 _SECURITY_GUARD = "security_flag_blocks_refund"
 
@@ -44,17 +45,56 @@ def risk_score_lookup(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def policy_version_read(redis: Any, key: str = "policy:refund_window") -> dict[str, Any]:
-    mem = redis.get_memory(key) or {"value": "", "version": 1}
+def policy_version_read(mem: dict[str, Any] | None, key: str = "policy:refund_window") -> dict[str, Any]:
+    mem = mem or {"value": "", "version": 1}
     version = int(mem.get("version", 1))
     content = mem.get("value", "")
-    freshness = "stale" if version < 2 else "fresh"
     return {
         "tool": "policy_version_read",
         "policy_version": version,
-        "freshness": freshness,
+        "freshness": "stale" if version < 2 else "fresh",
         "artifact_hash": artifact_value_hash({"value": content, "version": version}),
         "key": key,
+    }
+
+
+def evaluate_decision_policies(
+    ticket: dict[str, Any],
+    artifacts: dict[str, Any],
+    action: str,
+    tool_names: list[str],
+) -> dict[str, Any]:
+    """Authorize a proposed decision with the exact pinned Policy DSL bundle."""
+    violated_rules: list[str] = []
+    violations: list[str] = []
+    evaluations: list[dict[str, Any]] = []
+    facts = {
+        "ticket": ticket,
+        "context": {},
+        "artifacts": artifacts,
+        "decision": {"action": action, "tool_calls": tool_names},
+    }
+    for raw_rule in artifacts.get("policy_rules") or []:
+        rule = parse_policy_rule(raw_rule)
+        if rule.status != "approved":
+            continue
+        result = evaluate_policy(rule, facts)
+        evaluations.append(
+            {
+                "rule_id": result.rule_id,
+                "applies": result.applies,
+                "passed": result.passed,
+                "read_set": list(result.read_set),
+            }
+        )
+        if not result.passed:
+            violated_rules.append(result.rule_id)
+            violations.extend(violation.message for violation in result.violations)
+    return {
+        "passed": not violated_rules,
+        "violated_rules": violated_rules,
+        "violations": violations,
+        "evaluations": evaluations,
     }
 
 
@@ -62,21 +102,21 @@ def refund_tool(context: dict[str, Any]) -> dict[str, Any]:
     ticket = context.get("ticket") or {}
     artifacts = context.get("artifacts") or {}
     action = context.get("action", "")
-    security = bool(ticket.get("security_flag"))
-    has_guard = _has_rule(artifacts, _SECURITY_GUARD)
     amount = ticket.get("amount")
-    if security and not has_guard:
+    policy_evidence = evaluate_decision_policies(ticket, artifacts, action, ["refund_tool"])
+    if not policy_evidence["passed"]:
         return {
             "tool": "refund_tool",
             "authorization": "blocked",
-            "reason": "security_flag active — missing security_flag_blocks_refund guard",
+            "reason": "; ".join(policy_evidence["violations"]),
             "amount": amount,
+            "violated_rules": policy_evidence["violated_rules"],
         }
     if action == "approve_refund":
         return {
             "tool": "refund_tool",
             "authorization": "allowed",
-            "reason": "policy permits refund",
+            "reason": "all applicable approved policies passed",
             "amount": amount,
         }
     return {
@@ -110,35 +150,26 @@ def run_evidence_tools(
     ticket: dict[str, Any],
     artifacts: dict[str, Any],
     action: str,
-    redis: Any,
+    policy_memory: dict[str, Any],
     ledger: Any,
 ) -> dict[str, Any]:
-    """Enterprise evidence chain — parallel to graded tool_calls."""
     crm = crm_lookup({"ticket": ticket})
     risk = risk_score_lookup({"ticket": ticket, "artifacts": artifacts})
-    policy = policy_version_read(redis)
+    policy = policy_version_read(policy_memory)
 
     if action in {"escalate_security", "block_refund_tool", "require_security_review"}:
         resolution_tool = escalate_security({"ticket": ticket})
         tool_attempt = "escalate_security"
-        policy_result = "allowed"
-        authorization = "allowed"
-    elif ticket.get("security_flag") and action == "approve_refund":
-        resolution_tool = refund_tool({"ticket": ticket, "artifacts": artifacts, "action": action})
-        tool_attempt = "refund_tool"
-        policy_result = "blocked"
-        authorization = "denied_after_attempt"
     elif action == "approve_refund":
         resolution_tool = refund_tool({"ticket": ticket, "artifacts": artifacts, "action": action})
         tool_attempt = "refund_tool"
-        policy_result = "allowed"
-        authorization = "allowed"
     else:
         resolution_tool = escalate_security({"ticket": ticket})
         tool_attempt = "escalate_security"
-        policy_result = "allowed"
-        authorization = "allowed"
 
+    allowed = resolution_tool.get("authorization", "allowed") == "allowed"
+    policy_result = "allowed" if allowed else "blocked"
+    authorization = "allowed" if allowed else "denied_after_attempt"
     audit = audit_log_write(
         ledger,
         "swarm_resolution",
@@ -148,6 +179,7 @@ def run_evidence_tools(
             "tool_attempt": tool_attempt,
             "policy_result": policy_result,
             "authorization": authorization,
+            "violated_rules": resolution_tool.get("violated_rules", []),
         },
     )
     return {

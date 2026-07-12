@@ -31,8 +31,15 @@ class MemoryRedis(RedisStore):
         raw = self._data.get("routing:rules")
         return json.loads(raw) if raw else []
 
-    def set_config(self, key: str, value: str | int) -> None:
-        self._data[f"config:{key}"] = str(value)
+    def set_policy_rules(self, rules: list[dict[str, Any]]) -> None:
+        self._data["policy:rules"] = json.dumps(rules)
+
+    def get_policy_rules(self) -> list[dict[str, Any]]:
+        raw = self._data.get("policy:rules")
+        return json.loads(raw) if raw else []
+
+    def set_config(self, key: str, value: Any) -> None:
+        self._data[f"config:{key}"] = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
 
     def get_config(self, key: str, default: str | None = None) -> str | None:
         return self._data.get(f"config:{key}", default)
@@ -45,15 +52,32 @@ class MemoryRedis(RedisStore):
         return {
             "memory": memory,
             "routing_rules": self.get_routing_rules(),
+            "policy_rules": self.get_policy_rules(),
             "max_transitions": int(self.get_config("max_transitions", "6") or "6"),
         }
 
     def xadd(self, stream: str, fields: dict[str, Any]) -> str:
-        self._streams.setdefault(stream, []).append(fields)
-        return "1-0"
+        rows = self._streams.setdefault(stream, [])
+        entry_id = f"{len(rows) + 1}-0"
+        rows.append({"id": entry_id, **fields})
+        return entry_id
+
+    def xread(self, stream: str, *, last_id: str = "$", block_ms: int = 15_000, count: int = 100) -> list[dict[str, Any]]:
+        del block_ms
+        rows = self._streams.get(stream, [])
+        if last_id == "$":
+            return []
+        start = int(last_id.split("-", 1)[0]) if "-" in last_id else 0
+        return [dict(row) for row in rows if int(row["id"].split("-", 1)[0]) > start][:count]
 
     def xread_recent(self, stream: str, count: int = 50) -> list[dict[str, Any]]:
         return self._streams.get(stream, [])[-count:]
+
+    def get_llm_cache(self, cache_key: str) -> str | None:
+        return self._data.get(f"llm-cache:{cache_key}")
+
+    def set_llm_cache(self, cache_key: str, value: str, *, ttl_seconds: int = 86_400) -> None:
+        self._data[f"llm-cache:{cache_key}"] = value
 
     def flush_loopie_keys(self) -> None:
         self._data.clear()
@@ -77,6 +101,9 @@ class MemoryRedis(RedisStore):
 
     def preflight_capabilities(self) -> dict[str, Any]:
         return {"ping": True, "json": False, "search": False, "timeseries": False, "vector": False, "cluster_mode": False, "db": 0}
+
+    def close(self) -> None:
+        return None
 
 
 class MemoryLedger(Ledger):
@@ -120,7 +147,8 @@ class MemoryLedger(Ledger):
         rows = self._memory_costs if mode is None else [r for r in self._memory_costs if r.get("mode") == mode]
         return float(sum(r.get("estimated_cost", 0) for r in rows))
 
-    def artifact_history(self, artifact_key: str) -> list[dict[str, Any]]:
+    def artifact_history(self, artifact_key: str, *, project_id: str = "00000000-0000-0000-0000-000000000001") -> list[dict[str, Any]]:
+        del project_id
         return [r for r in self._memory_rows if r["artifact_key"] == artifact_key]
 
     def record_audit(self, event_type: str, payload: dict[str, Any]) -> int | None:

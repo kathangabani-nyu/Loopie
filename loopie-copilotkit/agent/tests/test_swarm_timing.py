@@ -6,7 +6,7 @@ from src.loopie.runner import run_ticket, seed_baseline, tickets_by_id
 EXPECTED_RECEIPT_KEYS = {
     "triage": {"classification", "security_flag", "amount", "tier"},
     "memory_lookup": {"policy_version", "freshness", "artifact_hash"},
-    "policy_check": {"rule_checked", "present"},
+    "policy_check": {"applicable_rules", "approved_rules_checked", "policy_read_sets"},
     "resolution": {"tool_attempt", "policy_result", "authorization", "action"},
     "evaluator": {"scorers_passed", "scorers_total", "audit_event_id"},
 }

@@ -1,78 +1,36 @@
-import {
-  CopilotRuntime,
-  CopilotKitIntelligence,
-  createCopilotEndpoint,
-  InMemoryAgentRunner,
-} from "@copilotkit/runtime/v2";
-import { LangGraphAgent } from "@copilotkit/runtime/langgraph";
+import { CopilotRuntime, createCopilotEndpoint, InMemoryAgentRunner } from "@copilotkit/runtime/v2";
+import { HttpAgent } from "@ag-ui/client";
 import { handle } from "hono/vercel";
 
-const loopieControlAgent = new LangGraphAgent({
-  deploymentUrl:
-    process.env.AGENT_URL ||
-    process.env.LANGGRAPH_DEPLOYMENT_URL ||
-    "http://localhost:8123",
-  graphId: "loopie_control",
-  langsmithApiKey: process.env.LANGSMITH_API_KEY || "",
-});
+import { guardOwnerRequest } from "@/lib/server-security";
 
-const defaultAgent = new LangGraphAgent({
-  deploymentUrl:
-    process.env.AGENT_URL ||
-    process.env.LANGGRAPH_DEPLOYMENT_URL ||
-    "http://localhost:8123",
-  graphId: process.env.LOOPIE_DEFAULT_GRAPH || "loopie_control",
-  langsmithApiKey: process.env.LANGSMITH_API_KEY || "",
-});
+const loopieApiBase = process.env.LOOPIE_API_BASE || "http://localhost:8001";
+const serviceToken = process.env.LOOPIE_API_TOKEN;
 
-const sampleAgent = new LangGraphAgent({
-  deploymentUrl:
-    process.env.AGENT_URL ||
-    process.env.LANGGRAPH_DEPLOYMENT_URL ||
-    "http://localhost:8123",
-  graphId: "sample_agent",
-  langsmithApiKey: process.env.LANGSMITH_API_KEY || "",
-});
+function makeControlAgent() {
+  return new HttpAgent({
+    agentId: "loopie_control",
+    url: `${loopieApiBase}/api/copilotkit/agent/loopie_control`,
+    headers: serviceToken ? { Authorization: `Bearer ${serviceToken}` } : {},
+  });
+}
 
 const runtime = new CopilotRuntime({
-  agents: { default: defaultAgent, sample_agent: sampleAgent, loopie_control: loopieControlAgent },
-  // --- copilotkit:intelligence (remove this block to opt out) ---
-  ...(process.env.COPILOTKIT_LICENSE_TOKEN
-    ? {
-        intelligence: new CopilotKitIntelligence({
-          apiKey: process.env.INTELLIGENCE_API_KEY ?? "",
-          apiUrl: process.env.INTELLIGENCE_API_URL ?? "http://localhost:4201",
-          wsUrl:
-            process.env.INTELLIGENCE_GATEWAY_WS_URL ?? "ws://localhost:4401",
-        }),
-        // Demo stub — replace with your real auth-derived user identity before any
-        // multi-user deployment, or all users share one thread history.
-        identifyUser: () => ({ id: "demo-user", name: "Demo User" }),
-        licenseToken: process.env.COPILOTKIT_LICENSE_TOKEN,
-      }
-    : { runner: new InMemoryAgentRunner() }),
-  // --- /copilotkit:intelligence ---
-  openGenerativeUI: true,
-  a2ui: {
-    injectA2UITool: false,
-  },
-  mcpApps: {
-    servers: [
-      {
-        type: "http",
-        url: process.env.MCP_SERVER_URL || "https://mcp.excalidraw.com",
-        serverId: "example_mcp_app",
-      },
-    ],
-  },
+  agents: { loopie_control: makeControlAgent() },
+  // LangGraph/Postgres owns graph durability. The runner only bridges this
+  // authenticated request to the AG-UI agent and holds no product evidence.
+  runner: new InMemoryAgentRunner(),
 });
 
-const app = createCopilotEndpoint({
-  runtime,
-  basePath: "/api/copilotkit",
-});
+const endpoint = handle(createCopilotEndpoint({ runtime, basePath: "/api/copilotkit" }));
 
-export const GET = handle(app);
-export const POST = handle(app);
-export const PATCH = handle(app);
-export const DELETE = handle(app);
+async function guarded(request: Request) {
+  const mutation = request.method !== "GET";
+  const denied = await guardOwnerRequest(request, { mutation, scope: "copilotkit" });
+  return denied || endpoint(request);
+}
+
+export const GET = guarded;
+export const POST = guarded;
+export const PATCH = guarded;
+export const DELETE = guarded;

@@ -53,12 +53,16 @@ def run_preflight(
     weave_required = settings.weave_enabled
     weave_ready = (not weave_required) or (weave_enabled and bool(weave_project_url))
     provider_mode = _provider_mode()
+    provider_ready = settings.is_test or provider_mode != "live:unconfigured"
+    service_auth_ready = bool(settings.api_token)
 
     hosted_requirements_met = (
         redis_reachable
         and postgres_reachable
         and persistence_mode == "postgres"
         and weave_ready
+        and provider_ready
+        and service_auth_ready
     )
     ok = hosted_requirements_met if settings.hosted else True
 
@@ -77,6 +81,8 @@ def run_preflight(
         "weave_project_url": weave_project_url,
         "weave_dashboard_ready": bool(weave_project_url),
         "provider_mode": provider_mode,
+        "provider_ready": provider_ready,
+        "service_auth_ready": service_auth_ready,
         "llm_mode": settings.llm_mode,
         "full_agentic": settings.full_agentic,
         "cursor_provider_enabled": bool(cursor_cfg and cursor_cfg.enabled),
@@ -94,6 +100,10 @@ def assert_hosted_ready(*, redis: RedisStore | None = None, ledger: Ledger | Non
             missing.append("postgres")
         if report["weave_flag"] and not report["weave_dashboard_ready"]:
             missing.append("wandb/weave dashboard")
+        if not report["provider_ready"]:
+            missing.append("live LLM provider")
+        if not report["service_auth_ready"]:
+            missing.append("service API token")
         raise RuntimeError(
             "Hosted Loopie preflight failed — audit persistence requires "
             f"{', '.join(missing)}. Set REDIS_URL, POSTGRES_URL, WANDB_API_KEY, "
