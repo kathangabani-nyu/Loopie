@@ -469,10 +469,11 @@ class PostgresProductRepository:
             async with conn.cursor(row_factory=dict_row) as cursor:
                 result = await cursor.execute(
                     """
-                    SELECT failure.*, result.run_id AS eval_run_id, result.ticket_id,
+                    SELECT failure.*, eval_run.run_id, result.eval_run_id, result.ticket_id,
                            result.decision, result.scores, ticket.external_id
                     FROM loopie.failures AS failure
                     JOIN loopie.eval_case_results AS result ON result.id = failure.eval_case_result_id
+                    JOIN loopie.eval_runs AS eval_run ON eval_run.id = result.eval_run_id
                     LEFT JOIN loopie.tickets AS ticket ON ticket.id = result.ticket_id
                     WHERE failure.project_id = %s
                     ORDER BY failure.created_at DESC LIMIT %s
