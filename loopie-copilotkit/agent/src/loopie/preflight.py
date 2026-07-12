@@ -23,6 +23,12 @@ def _weave_traces_url() -> str | None:
     return weave_traces_url()
 
 
+def _weave_runtime_status() -> dict[str, Any]:
+    from src.loopie.observability import weave_runtime_status
+
+    return weave_runtime_status()
+
+
 def _provider_mode() -> str:
     settings = get_settings()
     registry = provider_registry()
@@ -49,7 +55,12 @@ def run_preflight(
     postgres_reachable = ledger.ping()
     persistence_mode = ledger.persistence_mode
     weave_enabled = _weave_enabled()
-    weave_project_url = _weave_traces_url() if os.getenv("WANDB_API_KEY") else None
+    weave_status = (
+        _weave_runtime_status()
+        if weave_enabled and os.getenv("WANDB_API_KEY")
+        else {"ready": False, "error": None}
+    )
+    weave_project_url = _weave_traces_url() if weave_status["ready"] else None
     provider_mode = _provider_mode()
     provider_ready = settings.is_test or provider_mode != "live:unconfigured"
     service_auth_ready = bool(settings.api_token)
@@ -76,7 +87,8 @@ def run_preflight(
         "weave_configured": bool(os.getenv("WANDB_API_KEY")),
         "weave_flag": get_settings().weave_enabled,
         "weave_project_url": weave_project_url,
-        "weave_dashboard_ready": bool(weave_project_url),
+        "weave_dashboard_ready": bool(weave_status["ready"] and weave_project_url),
+        "weave_init_error": weave_status["error"],
         "provider_mode": provider_mode,
         "provider_ready": provider_ready,
         "service_auth_ready": service_auth_ready,

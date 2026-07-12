@@ -88,6 +88,7 @@ def _health_report(request: Request):
         "worker_running": runtime.worker.running,
         "weave_configured": report["weave_configured"],
         "weave_dashboard_ready": report["weave_dashboard_ready"],
+        "weave_init_error": report["weave_init_error"],
     }
 
 
