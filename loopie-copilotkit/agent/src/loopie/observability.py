@@ -195,7 +195,11 @@ def current_weave_call_evidence() -> dict[str, str] | None:
         return None
 
 
-def op(name: str) -> Callable[[F], F]:
+def op(
+    name: str,
+    *,
+    call_display_name: str | Callable[[Any], str] | None = None,
+) -> Callable[[F], F]:
     """Decorate with weave.op when LOOPIE_WEAVE_ENABLED and W&B creds are present."""
 
     def decorator(fn: F) -> F:
@@ -208,7 +212,11 @@ def op(name: str) -> Callable[[F], F]:
                 if not ensure_weave():
                     return fn(*args, **kwargs)
                 if weave_fn is None:
-                    weave_fn = _weave.op(name=name, postprocess_inputs=_postprocess_inputs)(fn)
+                    weave_fn = _weave.op(
+                        name=name,
+                        call_display_name=call_display_name,
+                        postprocess_inputs=_postprocess_inputs,
+                    )(fn)
                 return weave_fn(*args, **kwargs)
             return fn(*args, **kwargs)
 
