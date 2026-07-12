@@ -5,7 +5,7 @@ services:
     plan: free
     dockerfilePath: ./loopie-copilotkit/agent/Dockerfile
     dockerContext: ./loopie-copilotkit/agent
-    healthCheckPath: /health
+    healthCheckPath: /healthz
     envVars:
       - key: LOOPIE_HOSTED
         value: "1"
@@ -28,9 +28,7 @@ services:
       - key: REDIS_URL
         sync: false
       - key: POSTGRES_URL
-        fromDatabase:
-          name: loopie-postgres
-          property: connectionString
+        sync: false
       - key: WANDB_API_KEY
         sync: false
       - key: WANDB_ENTITY
@@ -43,11 +41,3 @@ services:
         sync: false
       - key: LOOPIE_ENABLE_ADMIN_RESET
         value: "false"
-
-databases:
-  - name: loopie-postgres
-    plan: free
-    postgresMajorVersion: "16"
-    databaseName: loopie
-    user: loopie
-    ipAllowList: []

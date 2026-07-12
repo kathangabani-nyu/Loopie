@@ -59,7 +59,7 @@ def _runtime(request: Request) -> RuntimeServices:
 
 @app.middleware("http")
 async def service_auth(request: Request, call_next):
-    if request.method == "OPTIONS" or request.url.path == "/health":
+    if request.method == "OPTIONS" or request.url.path == "/healthz":
         return await call_next(request)
     settings = get_settings()
     if not settings.api_token:
@@ -72,8 +72,7 @@ async def service_auth(request: Request, call_next):
     return await call_next(request)
 
 
-@app.get("/health")
-def health(request: Request):
+def _health_report(request: Request):
     runtime = _runtime(request)
     report = run_preflight(redis=runtime.stores.redis, ledger=runtime.stores.ledger)
     return {
@@ -83,7 +82,18 @@ def health(request: Request):
         "persistence_mode": report["persistence_mode"],
         "provider_mode": report["provider_mode"],
         "llm_mode": report["llm_mode"],
+        "redis_reachable": report["redis_reachable"],
+        "redis_tls": get_settings().redis_url.lower().startswith("rediss://"),
+        "postgres_reachable": report["postgres_reachable"],
+        "worker_running": runtime.worker.running,
+        "weave_configured": report["weave_configured"],
+        "weave_dashboard_ready": report["weave_dashboard_ready"],
     }
+
+
+@app.get("/healthz")
+def healthz(request: Request):
+    return _health_report(request)
 
 
 @app.get("/preflight")

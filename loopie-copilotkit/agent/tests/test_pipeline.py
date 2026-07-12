@@ -33,9 +33,9 @@ def test_run_suite_test_zero_cost(monkeypatch):
     assert pipeline.ledger.total_cost(mode="test") == 0.0
 
     baseline_run = result["baseline"]["failure"]["run"]
-    assert baseline_run["execution_engine"] == "langgraph_swarm"
+    assert baseline_run["execution_engine"] == "langgraph_bounded_agent"
     assert baseline_run["swarm_nodes"] == list(SWARM_NODE_ORDER)
-    assert result["patched"]["run"]["execution_engine"] == "langgraph_swarm"
+    assert result["patched"]["run"]["execution_engine"] == "langgraph_bounded_agent"
     assert pipeline.export_state()["preflight"]["provider_mode"] == "test"
 
 
@@ -49,6 +49,29 @@ def test_hosted_mode_rejects_non_durable_stores(monkeypatch):
     get_settings.cache_clear()
     with pytest.raises(RuntimeError, match="Hosted Loopie preflight failed"):
         assert_hosted_ready(redis=MemoryRedis(), ledger=MemoryLedger())
+
+
+def test_hosted_ordinary_runs_do_not_require_weave_configuration(monkeypatch):
+    from src.loopie.preflight import run_preflight
+
+    from memory_stores import MemoryLedger, MemoryRedis
+
+    class DurableLedger(MemoryLedger):
+        def ping(self) -> bool:
+            self._postgres_ok = True
+            return True
+
+    monkeypatch.setenv("LOOPIE_HOSTED", "1")
+    monkeypatch.setenv("LOOPIE_API_TOKEN", "test-token")
+    monkeypatch.setenv("LOOPIE_WEAVE_ENABLED", "true")
+    monkeypatch.delenv("WANDB_API_KEY", raising=False)
+    monkeypatch.delenv("WANDB_ENTITY", raising=False)
+    get_settings.cache_clear()
+
+    report = run_preflight(redis=MemoryRedis(), ledger=DurableLedger())
+
+    assert report["ok"] is True
+    assert report["weave_dashboard_ready"] is False
 
 
 def test_test_run_records_oracle_decision(monkeypatch):

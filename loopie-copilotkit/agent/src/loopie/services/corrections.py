@@ -80,7 +80,11 @@ class CorrectionService:
         if not artifact_key:
             raise ValueError("correction has no projectable artifact")
 
-        primary = ticket_to_agent_input(failure)
+        pinned_ticket = (
+            ((failure.get("decision") or {}).get("run_manifest") or {}).get("ticket_snapshot")
+            or failure
+        )
+        primary = ticket_to_agent_input(pinned_ticket)
         affected_rows = await self.repository.tickets_affected_by_artifact(artifact_key, limit=100)
         holdout_rows = await self.repository.list_tickets(limit=6)
         tickets = {str(primary["case_id"]): primary}

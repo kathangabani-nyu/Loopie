@@ -1,6 +1,6 @@
 # Loopie Hosted Demo Runbook
 
-Zero-cost hosted stack: **Vercel (Next.js + CopilotKit UI) → Render (`loopie-api` + `loopie-agent`) → Neon Postgres + Redis Cloud + W&B Weave**.
+Zero-cost hosted stack: **Vercel (Next.js + CopilotKit UI) → Render (`loopie-api`) → Neon Postgres + Redis Cloud free tier + W&B Weave**.
 
 ## Architecture
 
@@ -10,9 +10,9 @@ Browser
   └─ CopilotKit side chat → AGENT_URL (loopie-agent, live GPT via LOOPIE_OPENAI_MODEL)
 
 loopie-api (Render, deterministic proof path)
-  ├─ LangGraph worker swarm (triage → memory → policy → resolution → evaluator)
+  ├─ LangGraph bounded-agent runtime (triage → context → resolver → execution → evaluator)
   ├─ Loopie supervisor pipeline (diagnose → propose → HITL approve → rerun)
-  ├─ Redis Cloud (live artifacts + event streams)
+  ├─ Redis Cloud free tier (live artifacts + event streams)
   ├─ Neon Postgres (artifact Time Machine + cost ledger)
   └─ Weave (traces/evals when LOOPIE_WEAVE_ENABLED=true — independent of LLM mode)
 
@@ -58,15 +58,16 @@ Deploy via Blueprint: `render.yaml` at repo root. Service `loopie-api` uses `roo
 | `LOOPIE_HOSTED` | yes | `1` |
 | `LOOPIE_LLM_MODE` | yes | `test` for judging |
 | `LOOPIE_WEAVE_ENABLED` | yes | `true` for public Weave proof |
-| `REDIS_URL` | yes | Redis Cloud |
+| `REDIS_URL` | yes | Existing Redis Cloud `redis://` URL |
+| `LOOPIE_ALLOW_INSECURE_REDIS` | yes | `1`; explicit opt-out for the current non-TLS free-tier endpoint |
 | `POSTGRES_URL` | yes | Neon pooled URL |
-| `WANDB_API_KEY` | yes (Weave proof) | Required when `LOOPIE_WEAVE_ENABLED=true` |
-| `WANDB_ENTITY` | yes (Weave URLs) | Used in eval deep-links |
+| `WANDB_API_KEY` | Golden Demo only | Ordinary tickets soft-fail to incomplete evidence; required for judge-facing proof |
+| `WANDB_ENTITY` | Golden Demo only | Required for valid baseline and patched trace links |
 | `WEAVE_PROJECT` | yes | `loopie` |
 | `OPENAI_API_KEY` | test: no | Only for live rehearsal (`LOOPIE_LLM_MODE=live`) |
 
 **Start:** `uvicorn loopie_server:app --host 0.0.0.0 --port $PORT`
-**Health:** `GET /health`
+**Health:** `GET /healthz`
 
 ### Render — `loopie-agent` (LangGraph live chat)
 
@@ -101,7 +102,7 @@ Manually run **keep-warm** workflow before recording. Pings every 10 min keep bo
 
 ## Preflight
 
-`GET /preflight` (proxied at `/api/loopie/preflight`) returns Redis/Postgres/provider mode and `weave_enabled` (true when `LOOPIE_WEAVE_ENABLED=true` and `WANDB_API_KEY` is set). Hosted: `ok: false` → HTTP 503.
+`GET /preflight` (proxied at `/api/loopie/preflight`) returns Redis/Postgres/provider mode and `weave_enabled` (true when `LOOPIE_WEAVE_ENABLED=true` and `WANDB_API_KEY` is set). Hosted readiness does not fail solely because Weave is unavailable; ordinary tickets finish with incomplete evidence. The Golden Demo start endpoint separately requires `weave_dashboard_ready`.
 
 ## Deploy checklist
 
@@ -138,7 +139,7 @@ Manually run **keep-warm** workflow before recording. Pings every 10 min keep bo
 
 ## Rehearsal checklist
 
-1. Deploy both Render services; confirm `/health` and `/ok`.
+1. Deploy the Render API service; confirm `/healthz`.
 2. Deploy Vercel with `LOOPIE_API_BASE` + `AGENT_URL`.
 3. `POST /reset` — baseline artifacts reseeded (Loopie keys only; chat-cost ledger preserved).
 4. Full test + Weave proof path via cockpit buttons.

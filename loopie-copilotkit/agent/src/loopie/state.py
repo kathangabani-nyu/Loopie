@@ -11,6 +11,9 @@ class LoopieState(TypedDict, total=False):
     routing_decision: str | None
     routing_rules: list[dict[str, Any]]
     tool_calls: list[dict[str, Any]]
+    proposed_tools: list[dict[str, Any]]
+    evidence_calls: list[dict[str, Any]]
+    decision_iterations: int
     transitions: int
     action: str | None
     narration: dict[str, str]
@@ -27,3 +30,5 @@ class LoopieState(TypedDict, total=False):
     cache_hit: bool
     execution_engine: str
     audit_event_id: int | None
+    audit_payload: dict[str, Any]
+    tool_receipts: list[dict[str, Any]]

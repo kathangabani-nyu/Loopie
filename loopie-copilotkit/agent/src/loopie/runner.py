@@ -43,6 +43,8 @@ def tickets_by_id(limit: int | None = None) -> dict[str, dict[str, Any]]:
 def _execute_run(
     ticket: dict[str, Any],
     *,
+    run_id: str,
+    project_id: str,
     redis: RedisStore,
     ledger: Ledger,
     mode: str | None,
@@ -70,6 +72,8 @@ def _execute_run(
         artifact_overrides["transitions"] = settings.max_agent_transitions
 
     ctx = RunContext(
+        run_id=run_id,
+        project_id=project_id,
         redis=redis,
         ledger=ledger,
         mode=mode,
@@ -79,6 +83,7 @@ def _execute_run(
         manifest_reader=manifest_reader,
         eval_scope=eval_scope,
         artifact_overrides=artifact_overrides,
+        cost_events=[],
     )
     token = run_ctx.set(ctx)
     try:
@@ -103,7 +108,12 @@ def _execute_run(
         from src.loopie.reliability.oracle import decide_action
 
         action = decide_action(ticket, artifacts)
-    tool_calls = final_state.get("tool_calls") or decide_tool_calls(action)
+    if "tool_calls" in final_state:
+        tool_calls = list(final_state.get("tool_calls") or [])
+    elif mode == "live":
+        raise RuntimeError("Production run completed without an effect-tool proposal record")
+    else:
+        tool_calls = decide_tool_calls(action)
     oracle_action = None
     if mode == "test":
         from src.loopie.reliability.oracle import decide_action
@@ -114,7 +124,8 @@ def _execute_run(
     swarm_nodes = [entry["node"] for entry in trace if entry.get("node") in SWARM_NODE_ORDER]
 
     run = {
-        "run_id": str(uuid.uuid4()),
+        "run_id": run_id,
+        "project_id": project_id,
         "case_id": ticket["case_id"],
         "action": action,
         "tool_calls": tool_calls,
@@ -140,6 +151,11 @@ def _execute_run(
         "read_set": ctx.read_set(),
         "budget": budget.to_dict(),
         "budget_guard_triggered": bool(final_state.get("budget_guard_triggered", False)),
+        "cost_events": list(ctx.cost_events or []),
+        "audit_payload": dict(final_state.get("audit_payload") or {}),
+        "tool_receipts": list(final_state.get("tool_receipts") or []),
+        "evidence_calls": list(final_state.get("evidence_calls") or []),
+        "decision_iterations": int(final_state.get("decision_iterations", 0)),
     }
     if oracle_action is not None:
         run["oracle_action"] = oracle_action
@@ -160,12 +176,16 @@ def run_ticket(
     budget: BudgetTracker | None = None,
     eval_scope: bool = False,
     manifest: RunManifest | None = None,
+    run_id: str | None = None,
+    project_id: str = "00000000-0000-0000-0000-000000000001",
 ) -> dict[str, Any]:
     ensure_weave()
     redis = redis or RedisStore()
     ledger = ledger or Ledger.connect()
     return _execute_run(
         ticket,
+        run_id=run_id or str(uuid.uuid4()),
+        project_id=project_id,
         redis=redis,
         ledger=ledger,
         mode=mode,

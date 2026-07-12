@@ -17,11 +17,15 @@ import os
 import uuid
 
 import pytest
+from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from src.loopie.config import get_settings
 from src.loopie.jobs import PostgresJobStore
+from src.loopie.product_repository import PostgresProductRepository
 from src.loopie.reliability.corrections import project_pending_outbox
+from src.loopie.runner import seed_baseline
+from src.loopie.services.runs import RunService
 from src.loopie.stores.ledger import Ledger
 from src.loopie.stores.redis_store import RedisStore
 
@@ -93,7 +97,13 @@ def _clear_jobs_table():
 
 
 async def _open_job_pool() -> AsyncConnectionPool:
-    pool = AsyncConnectionPool(conninfo=POSTGRES_URL, min_size=1, max_size=3, open=False)
+    pool = AsyncConnectionPool(
+        conninfo=POSTGRES_URL,
+        min_size=1,
+        max_size=3,
+        open=False,
+        kwargs={"row_factory": dict_row},
+    )
     await pool.open(wait=True, timeout=10)
     return pool
 
@@ -164,6 +174,81 @@ def test_job_heartbeat_is_fenced_after_reclaim():
         )
         assert renewed is False
 
+        await pool.close(timeout=5)
+
+    asyncio.run(_run())
+
+
+@requires_real_stores
+def test_run_finalization_persists_audit_cost_and_job_atomically(ledger: Ledger, redis: RedisStore):
+    async def _run():
+        seed_baseline(redis=redis, ledger=ledger)
+        pool = await _open_job_pool()
+        repository = PostgresProductRepository(pool)
+        jobs = PostgresJobStore(pool)
+        runs = RunService(repository=repository, jobs=jobs, redis=redis, ledger=ledger)
+        ticket = next(
+            item for item in await repository.list_tickets(limit=500)
+            if item["external_id"] == "security_001"
+        )
+        queued = await runs.queue_ticket_run(
+            ticket_id=str(ticket["id"]),
+            mode="test",
+            kind="golden",
+            idempotency_key=f"finalize-{uuid.uuid4().hex[:8]}",
+        )
+        claimed = await jobs.claim(worker_id="finalizer", lease_seconds=30)
+        assert claimed is not None
+        await runs.execute(claimed)
+
+        stored = await repository.get_run(str(queued["run"]["id"]))
+        assert stored is not None
+        assert stored["status"] == "succeeded"
+        assert stored["audit_event_id"] is not None
+        with ledger._connect() as conn:
+            cost = conn.execute(
+                "SELECT COUNT(*) AS count FROM loopie.cost_ledger WHERE run_uuid = %s",
+                (str(queued["run"]["id"]),),
+            ).fetchone()
+            job = conn.execute(
+                "SELECT status, lease_token FROM loopie.jobs WHERE id = %s",
+                (claimed.id,),
+            ).fetchone()
+        assert int(cost["count"]) > 0
+        assert job["status"] == "succeeded"
+        assert job["lease_token"] is None
+        await pool.close(timeout=5)
+
+    asyncio.run(_run())
+
+
+@requires_real_stores
+def test_stale_lease_cannot_finalize_run(ledger: Ledger, redis: RedisStore):
+    async def _run():
+        seed_baseline(redis=redis, ledger=ledger)
+        pool = await _open_job_pool()
+        repository = PostgresProductRepository(pool)
+        jobs = PostgresJobStore(pool)
+        runs = RunService(repository=repository, jobs=jobs, redis=redis, ledger=ledger)
+        ticket = next(
+            item for item in await repository.list_tickets(limit=500)
+            if item["external_id"] == "security_001"
+        )
+        await runs.queue_ticket_run(
+            ticket_id=str(ticket["id"]),
+            mode="test",
+            kind="golden",
+            idempotency_key=f"stale-finalize-{uuid.uuid4().hex[:8]}",
+        )
+        stale = await jobs.claim(worker_id="stale", lease_seconds=0)
+        await asyncio.sleep(0.05)
+        current = await jobs.claim(worker_id="current", lease_seconds=30)
+        assert stale is not None and current is not None
+        with pytest.raises(RuntimeError, match="lease was lost"):
+            await runs.execute(stale)
+        stored = await repository.get_run(str(stale.payload["run_id"]))
+        assert stored is not None
+        assert stored["status"] != "succeeded"
         await pool.close(timeout=5)
 
     asyncio.run(_run())

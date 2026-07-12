@@ -17,6 +17,8 @@ from src.loopie.product_repository import FORBIDDEN_LIVE_TICKET_KEYS
 from src.loopie.reliability.correction_gen import CorrectionGenerationUnavailable
 from src.loopie.policy.compiler import PolicyCompilationUnavailable
 from src.loopie.runtime import RuntimeServices
+from src.loopie.preflight import run_preflight
+from src.loopie.runner import seed_baseline
 
 router = APIRouter(prefix="/api/v1")
 
@@ -28,6 +30,55 @@ def _runtime(request: Request) -> RuntimeServices:
     return runtime
 
 
+class DemoStart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm: Literal["RESET_DEMO"]
+
+
+@router.post("/demo/start", status_code=status.HTTP_202_ACCEPTED)
+async def start_golden_demo(body: DemoStart, request: Request) -> Any:
+    runtime = _runtime(request)
+    readiness = await asyncio.to_thread(
+        run_preflight,
+        redis=runtime.stores.redis,
+        ledger=runtime.stores.ledger,
+    )
+    if not readiness.get("weave_dashboard_ready"):
+        raise HTTPException(status_code=503, detail="Golden Demo requires a configured Weave dashboard")
+    active = [
+        run for run in await runtime.repository.list_runs(limit=500)
+        if run.get("status") in {"queued", "running"}
+    ]
+    if active:
+        raise HTTPException(status_code=409, detail="wait for active runs before resetting the demo")
+    await asyncio.to_thread(runtime.stores.redis.flush_loopie_keys)
+    await asyncio.to_thread(runtime.stores.ledger.reset)
+    await asyncio.to_thread(seed_baseline, redis=runtime.stores.redis, ledger=runtime.stores.ledger)
+    ticket = next(
+        (
+            item for item in await runtime.repository.list_tickets(limit=500)
+            if item.get("external_id") == "security_001"
+        ),
+        None,
+    )
+    if ticket is None:
+        raise HTTPException(status_code=503, detail="security_001 fixture is not seeded")
+    queued = await runtime.runs.queue_ticket_run(
+        ticket_id=str(ticket["id"]),
+        mode="test",
+        kind="golden",
+        idempotency_key="demo:security_001:baseline",
+    )
+    return jsonable_encoder(
+        {
+            "reset": True,
+            "scenario": "security_001",
+            "run_id": queued["run"]["id"],
+            "status": queued["run"]["status"],
+        }
+    )
+
+
 class TicketCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -36,6 +87,12 @@ class TicketCreate(BaseModel):
     body: str = Field(min_length=1, max_length=100_000)
     channel: str = Field(default="api", min_length=1, max_length=50)
     customer_ref: str | None = Field(default=None, max_length=500)
+    customer_tier: Literal["enterprise", "standard", "trial"]
+    days_since_purchase: int = Field(ge=0, le=36500)
+    security_flag: bool
+    amount_minor: int | None = Field(default=None, ge=0)
+    currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
+    amount_source: Literal["explicit", "missing"] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list, max_length=50)
     auto_evaluate: bool = True
@@ -43,10 +100,22 @@ class TicketCreate(BaseModel):
     @field_validator("metadata")
     @classmethod
     def reject_golden_labels(cls, value: dict[str, Any]) -> dict[str, Any]:
-        leaked = sorted(FORBIDDEN_LIVE_TICKET_KEYS.intersection(value))
+        reserved = FORBIDDEN_LIVE_TICKET_KEYS | {
+            "case_id", "version", "request", "customer_tier", "days_since_purchase",
+            "security_flag", "amount_minor", "currency", "amount_source", "amount",
+        }
+        leaked = sorted(reserved.intersection(value))
         if leaked:
             raise ValueError(f"golden-only fields are not valid live ticket metadata: {', '.join(leaked)}")
         return value
+
+    @model_validator(mode="after")
+    def normalize_amount_source(self) -> "TicketCreate":
+        expected = "explicit" if self.amount_minor is not None else "missing"
+        if self.amount_source is not None and self.amount_source != expected:
+            raise ValueError(f"amount_source must be {expected} for the supplied amount")
+        self.amount_source = expected
+        return self
 
 
 class RunCreate(BaseModel):
@@ -96,6 +165,14 @@ async def create_ticket(body: TicketCreate, request: Request) -> Any:
         body=body.body,
         channel=body.channel,
         customer_ref=body.customer_ref,
+        facts={
+            "customer_tier": body.customer_tier,
+            "days_since_purchase": body.days_since_purchase,
+            "security_flag": body.security_flag,
+            "amount_minor": body.amount_minor,
+            "currency": body.currency,
+            "amount_source": body.amount_source,
+        },
         metadata=body.metadata,
         tags=body.tags,
     )
@@ -155,15 +232,21 @@ def _parse_ticket_document(body: TicketImport) -> list[TicketCreate]:
             metadata_raw = row.pop("metadata", "")
             tags_raw = row.pop("tags", "")
             metadata = json.loads(metadata_raw) if metadata_raw else {}
-            for key in ("customer_tier", "days_since_purchase", "security_flag"):
-                value = row.pop(key, "")
+            for key in (
+                "customer_tier", "days_since_purchase", "security_flag",
+                "amount_minor", "currency", "amount_source",
+            ):
+                value = row.get(key, "")
                 if value == "":
+                    row.pop(key, None)
                     continue
                 if key == "days_since_purchase":
                     value = int(value)
+                elif key == "amount_minor":
+                    value = int(value)
                 elif key == "security_flag":
                     value = str(value).strip().lower() in {"1", "true", "yes"}
-                metadata[key] = value
+                row[key] = value
             row["metadata"] = metadata
             if tags_raw:
                 row["tags"] = (
@@ -190,6 +273,14 @@ async def import_tickets(body: TicketImport, request: Request) -> Any:
             body=item.body,
             channel=item.channel,
             customer_ref=item.customer_ref,
+            facts={
+                "customer_tier": item.customer_tier,
+                "days_since_purchase": item.days_since_purchase,
+                "security_flag": item.security_flag,
+                "amount_minor": item.amount_minor,
+                "currency": item.currency,
+                "amount_source": item.amount_source,
+            },
             metadata=item.metadata,
             tags=item.tags,
         )
@@ -265,6 +356,14 @@ async def get_run(run_id: str, request: Request) -> Any:
 @router.get("/failures")
 async def list_failures(request: Request, limit: int = 100) -> Any:
     return jsonable_encoder(await _runtime(request).repository.list_failures(limit=limit))
+
+
+@router.get("/failures/{failure_id}")
+async def get_failure(failure_id: str, request: Request) -> Any:
+    failure = await _runtime(request).repository.get_failure(failure_id)
+    if failure is None:
+        raise HTTPException(status_code=404, detail="failure not found")
+    return jsonable_encoder(failure)
 
 
 @router.post("/failures/{failure_id}/corrections", status_code=status.HTTP_201_CREATED)

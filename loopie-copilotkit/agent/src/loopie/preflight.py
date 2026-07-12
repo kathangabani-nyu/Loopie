@@ -50,8 +50,6 @@ def run_preflight(
     persistence_mode = ledger.persistence_mode
     weave_enabled = _weave_enabled()
     weave_project_url = _weave_traces_url() if os.getenv("WANDB_API_KEY") else None
-    weave_required = settings.weave_enabled
-    weave_ready = (not weave_required) or (weave_enabled and bool(weave_project_url))
     provider_mode = _provider_mode()
     provider_ready = settings.is_test or provider_mode != "live:unconfigured"
     service_auth_ready = bool(settings.api_token)
@@ -60,7 +58,6 @@ def run_preflight(
         redis_reachable
         and postgres_reachable
         and persistence_mode == "postgres"
-        and weave_ready
         and provider_ready
         and service_auth_ready
     )
@@ -98,14 +95,12 @@ def assert_hosted_ready(*, redis: RedisStore | None = None, ledger: Ledger | Non
             missing.append("redis")
         if not report["postgres_reachable"] or report["persistence_mode"] != "postgres":
             missing.append("postgres")
-        if report["weave_flag"] and not report["weave_dashboard_ready"]:
-            missing.append("wandb/weave dashboard")
         if not report["provider_ready"]:
             missing.append("live LLM provider")
         if not report["service_auth_ready"]:
             missing.append("service API token")
         raise RuntimeError(
-            "Hosted Loopie preflight failed — audit persistence requires "
+            "Hosted Loopie preflight failed — durable execution requires "
             f"{', '.join(missing)}. Set REDIS_URL, POSTGRES_URL, WANDB_API_KEY, "
             "and WANDB_ENTITY or disable LOOPIE_HOSTED."
         )

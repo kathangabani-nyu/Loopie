@@ -2,7 +2,7 @@
 
 **Reliability CI for agent swarms**; catch failures, explain them with traces, stage a Redis correction, get human approval, rerun the same eval, and prove recovery with before/after scores.
 
-Loopie is a closed-loop control plane for multi-agent support workflows. It combines a **LangGraph worker swarm**, **deterministic eval scorers**, **Redis live artifacts**, **Postgres audit history**, **Weights & Biases Weave** for traces and eval compare, **CopilotKit** for human-in-the-loop approval, and **OpenAI** for live supervisory chat — wired together so every step of the reliability story is inspectable, not hand-wavy.
+Loopie is a closed-loop control plane for agentic support workflows. It combines a **LangGraph bounded-agent runtime**, **deterministic eval scorers**, **Redis live artifacts**, **Postgres audit history**, **Weights & Biases Weave** for traces and eval compare, **CopilotKit** for human-in-the-loop approval, and **OpenAI** for live resolution and supervisory chat — wired together so every step of the reliability story is inspectable, not hand-wavy.
 
 URL to view UI (services won't work as I had to revoke API access for cost-cutting purposes): https://loopie-three.vercel.app/
 
@@ -51,16 +51,17 @@ flowchart TB
   end
 
   subgraph Data
-    Redis[(Redis Cloud<br/>JSON artifacts + streams)]
+    Redis[(Redis Cloud free tier<br/>artifacts + streams)]
     PG[(Neon Postgres<br/>ledger + Time Machine)]
     W&B[(W&B Weave<br/>traces + evals)]
   end
 
-  subgraph Swarm["LangGraph worker swarm"]
-    T[Triage] --> M[Memory Lookup]
-    M --> P[Policy Check]
-    P --> R[Resolution]
-    R --> E[Evaluator]
+  subgraph Swarm["LangGraph bounded-agent runtime"]
+    T[Triage] --> C[Pinned Context]
+    C --> R[Resolver Agent]
+    R <--> ET[Read-only Evidence Tools]
+    R --> X[Policy Authorization + Execution]
+    X --> E[Deterministic Evaluator]
   end
 
   UI --> Proxy --> API
@@ -78,9 +79,9 @@ flowchart TB
 | **UI** | Next.js 15, Framer Motion | Reliability cockpit — phase rail, trace viz, scorecard, artifact diff |
 | **Agent UX** | CopilotKit | Live chat, frontend tools, human-in-the-loop approval interrupts |
 | **Supervisor** | LangGraph (`loopie_control`) | Metered OpenAI chat that calls the same REST proof API as the buttons |
-| **Worker swarm** | LangGraph StateGraph | Five-node pipeline: triage → memory → policy → resolution → evaluator |
+| **Worker runtime** | LangGraph StateGraph | Deterministic control plane around one bounded evidence-gathering resolver agent |
 | **Proof API** | FastAPI (`loopie-api`) | Baseline, propose, approve, patched rerun, counterfactual — authoritative state |
-| **Live memory** | Redis Cloud (JSON) | Routing rules, policy versions, eval event streams (`XADD` / `XREAD`) |
+| **Live memory** | Redis Cloud free tier | Routing rules, policy versions, eval event streams (`XADD` / `XREAD`) |
 | **Audit trail** | Neon Postgres | Artifact versioning, correction ledger, cost tracking, Time Machine |
 | **Observability** | W&B Weave | `@weave.op` on every swarm node; `weave.Evaluation` suites for baseline vs patched |
 | **LLM** | OpenAI (`gpt-5.5`) | Live chat + optional agentic diagnosis; proof path uses deterministic **test** mode |
@@ -91,18 +92,18 @@ flowchart TB
 
 Loopie uses **two LangGraph graphs** on purpose:
 
-### Worker swarm (ticket execution)
+### Bounded-agent runtime (ticket execution)
 
-Each eval case runs through a fixed DAG with real timings and narrations:
+Each eval case runs through a fixed control-plane DAG with real timings and receipts:
 
 ```
-triage → memory_lookup → policy_check → resolution → evaluator
+triage → context → resolution agent → authorization/execution → evaluator
 ```
 
 - **Triage** classifies the ticket and security context.
-- **Memory lookup** reads policy version from Redis (staleness is part of the failure story).
-- **Policy check** evaluates routing guards against live artifacts.
-- **Resolution** authorizes tools and selects an action (oracle in test mode, live LLM when opted in).
+- **Context** pins Redis memory, routing rules, and policy rules into the run manifest.
+- **Resolution** selects evidence tools, observes results, and proposes an action plus effects (oracle episode in test mode, bounded LLM episode in live mode).
+- **Execution** deterministically authorizes the proposal against the Policy DSL before simulating effects.
 - **Evaluator** grades deterministic scorers (`action_match`, `unauthorized_tool_call`, etc.).
 
 Every node is wrapped with **Weave `@weave.op`** so latency, inputs (redacted), and outputs appear in the traces dashboard.
@@ -165,7 +166,7 @@ The side chat is additive. Judges can run the entire demo from buttons alone wit
 
 - Node.js 18+
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)
-- Redis (local or Redis Cloud)
+- Redis (local or the current Redis Cloud free-tier endpoint)
 - Postgres (local or Neon) for hosted parity
 - Optional: `WANDB_API_KEY` + `WANDB_ENTITY` for Weave
 
@@ -222,7 +223,7 @@ Production layout (see [`render.yaml`](render.yaml)):
 | Next.js UI | Vercel | Cockpit + `/api/loopie/*` proxy |
 | `loopie-api` | Render | FastAPI proof backend |
 | `loopie-agent` | Render | LangGraph + CopilotKit |
-| Redis | Redis Cloud | Live artifacts + streams |
+| Redis | Redis Cloud free tier | Live artifacts + streams; current endpoint uses explicit non-TLS opt-out |
 | Postgres | Neon | Ledger + Time Machine |
 | Weave | W&B Cloud | Traces + eval compare |
 

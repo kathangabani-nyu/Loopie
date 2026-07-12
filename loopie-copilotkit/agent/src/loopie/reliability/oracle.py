@@ -39,7 +39,7 @@ def decide_action(ticket: dict[str, Any], artifacts: dict[str, Any]) -> str:
         if case_id == "security_003":
             return "require_security_review"
         if case_id == "security_002":
-            return "block_refund_tool" if has_rule(artifacts, "security_flag_blocks_refund") else "approve_refund"
+            return "escalate_security" if has_rule(artifacts, "security_flag_blocks_refund") else "approve_refund"
         if has_rule(artifacts, "security_flag_blocks_refund") and ("refund" in request or "payout" in request):
             return "escalate_security"
         if "refund" in request or "payout" in request:

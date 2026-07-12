@@ -26,11 +26,13 @@ def test_budget_exhaustion_fails_live_decision_instead_of_using_oracle(monkeypat
     budget = BudgetTracker(budget_guard_triggered=True, stop_reason="max_estimated_cost_usd")
     gateway = LLMGateway(budget=budget, ledger=None)
     with pytest.raises(LiveDecisionUnavailable, match="budget exhausted"):
-        gateway._live_decision(
-        ticket={"case_id": "live-1", "request": "refund"},
-        artifacts={"routing_rules": [], "memory": {}, "action_taxonomy": ["escalate_security"]},
-        fixture_id="security_001",
-        artifact_version="v1",
+        gateway.decide_episode(
+            ticket={"case_id": "live-1", "request": "refund"},
+            artifacts={"routing_rules": [], "memory": {}, "action_taxonomy": ["escalate_security"]},
+            fixture_id="security_001",
+            artifact_version="v1",
+            policy_memory={"value": "Refunds within 30 days", "version": 1},
+            mode="live",
         )
 
 

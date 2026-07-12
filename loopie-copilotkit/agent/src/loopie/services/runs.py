@@ -10,8 +10,8 @@ from typing import Any
 from src.loopie.config import get_settings, normalize_llm_mode
 from src.loopie.jobs import Job, MemoryJobStore, PostgresJobStore
 from src.loopie.llm import DECISION_PROMPT_VERSION, DECISION_SCHEMA_VERSION
-from src.loopie.manifests import build_run_manifest
-from src.loopie.product_repository import ProductRepository, ticket_to_agent_input
+from src.loopie.manifests import ManifestReader, build_run_manifest
+from src.loopie.product_repository import ProductRepository
 from src.loopie.runner import run_ticket
 from src.loopie.reliability.scorers import score_layers
 from src.loopie.reliability.classifier import classify_production_failure
@@ -46,20 +46,30 @@ class RunService:
         kind: str = "ticket",
         parent_run_id: str | None = None,
         correction_id: str | None = None,
+        ticket_snapshot: dict[str, Any] | None = None,
+        evaluation_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         ticket = await self.repository.get_ticket(ticket_id)
         if ticket is None:
             raise KeyError(f"Unknown ticket {ticket_id}")
         mode = normalize_llm_mode(mode)
         settings = get_settings()
-        agent_ticket = ticket_to_agent_input(ticket)
+        if evaluation_snapshot is None and kind == "golden":
+            evaluation_snapshot = await self.repository.get_golden_annotation(
+                ticket_id,
+                project_id=str(ticket["project_id"]),
+            )
+            if evaluation_snapshot is None:
+                raise RuntimeError("Golden run references a ticket without a golden annotation")
         manifest = await asyncio.to_thread(
             build_run_manifest,
             self.redis,
-            agent_ticket,
+            ticket_snapshot or ticket,
+            project_id=str(ticket["project_id"]),
             prompt_version=DECISION_PROMPT_VERSION,
             schema_version=DECISION_SCHEMA_VERSION,
             model_version=settings.openai_model,
+            evaluation_snapshot=evaluation_snapshot,
         )
         run, _ = await self.repository.queue_run(
             ticket=ticket,
@@ -88,22 +98,17 @@ class RunService:
         run = await self.repository.get_run(run_id, project_id=job.project_id)
         if run is None:
             raise KeyError(f"Unknown run {run_id}")
-        ticket = await self.repository.get_ticket(str(run["ticket_id"]), project_id=job.project_id)
         manifest = await self.repository.get_run_manifest(str(run["manifest_id"]), project_id=job.project_id)
-        if ticket is None or manifest is None:
-            raise RuntimeError("Run references a missing ticket or manifest")
+        if manifest is None:
+            raise RuntimeError("Run references a missing manifest")
 
         await self.repository.mark_run_running(run_id)
         self.emit_event("run.running", {"run_id": run_id, "status": "running"})
-        agent_ticket = ticket_to_agent_input(ticket)
-        golden_annotation = None
-        if str(run["kind"]) == "golden":
-            golden_annotation = await self.repository.get_golden_annotation(
-                str(run["ticket_id"]),
-                project_id=job.project_id,
-            )
-            if golden_annotation is None:
-                raise RuntimeError("Golden run references a ticket without a golden annotation")
+        agent_ticket = ManifestReader(manifest).ticket_input()
+        golden_annotation = manifest.evaluation_snapshot
+        if str(run["kind"]) == "golden" and golden_annotation is None:
+            raise RuntimeError("Golden run manifest has no pinned annotation")
+        if golden_annotation is not None:
             golden_annotation = {
                 **golden_annotation,
                 **dict(golden_annotation.get("expected_metadata") or {}),
@@ -131,6 +136,8 @@ class RunService:
             mode=str(run["mode"]),
             artifact_version=manifest.content_hash[:16],
             manifest=manifest,
+            run_id=run_id,
+            project_id=job.project_id,
         )
         result["correctness"] = score_layers(
             result,
@@ -146,7 +153,16 @@ class RunService:
             )
             result["failure_category"] = classification.category
             result["failure_classification"] = classification.model_dump(mode="json")
-        await self.repository.finish_run(run_id, result)
+        await self.repository.finish_run(
+            run_id,
+            result,
+            job_id=job.id,
+            lease_token=job.lease_token,
+        )
+        if isinstance(self.jobs, MemoryJobStore) and job.lease_token:
+            completed = await self.jobs.complete(job_id=job.id, lease_token=job.lease_token)
+            if not completed:
+                raise RuntimeError("Job lease was lost before in-memory finalization")
         self.emit_event(
             "run.finished",
             {

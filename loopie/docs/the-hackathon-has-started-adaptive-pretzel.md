@@ -53,15 +53,15 @@ fully live:
 
 ---
 
-## Two agent layers + deterministic oracle (the harness story)
+## Bounded resolver agent + deterministic reliability harness
 
-Loopie is a **multi-agent system supervising a multi-agent system** — two genuine agentic layers.
-This is deliberately designed to score on "multi-agent harness sophistication," which is our weakest
-judging axis, while keeping the proof reproducible.
+Loopie uses two LangGraph orchestration layers while keeping the model boundary narrow and auditable.
+The ticket runtime contains one genuine evidence-gathering resolver agent; deterministic stages own
+context pinning, authorization, execution, and scoring.
 
-- **Worker swarm (real LLM agents):** heterogeneous agents — `triage`, `memory_lookup`,
-  `policy_check`, `resolution`, `evaluator` — that genuinely reason, route, hand off, and **decide**
-  proposed actions. They run at `temperature=0` + fixed seed for stability. Sophistication lives here.
+- **Ticket runtime:** `triage → context → resolution → execution → evaluator`. Only `resolution`
+  is model-driven in live mode: it selects read-only evidence tools, observes results, then proposes an
+  action and effects. The surrounding nodes are deterministic control-plane boundaries.
 - **Loopie supervisory loop (second agent layer):** `failure_classifier` → `correction_proposer`
   → `eval/replay_orchestrator`. This layer observes the worker swarm, diagnoses, and drives the
   correction lifecycle.
@@ -70,7 +70,7 @@ judging axis, while keeping the proof reproducible.
 
 We keep a deterministic reference (`decide.py`) but it does **not** replace the agents:
 
-> The LLM agents decide; their decisions are *grounded in the retrieved Redis artifact*, so at
+> The resolver agent decides; its proposal is *grounded in pinned Redis evidence*, so at
 > `temperature=0` a stale fact reliably drives the wrong action and the corrected fact reliably
 > drives the right one. `decide.py` is the **golden oracle** used for test/CI/proof-stability, and
 > we assert `live-LLM-swarm == oracle` on the canonical cases (differential test).
@@ -87,16 +87,16 @@ Why this is the right reconciliation:
 Implement `src/loopie/llm.py` as the **only** path to a model. No node calls `ChatOpenAI` directly.
 
 1. **`LOOPIE_LLM_MODE=test` is the DEFAULT.** Real calls require explicit `LOOPIE_LLM_MODE=live`.
-   `test` grades via the `decide.py` oracle + returns canned narration keyed by node+fixture; zero
-   network, zero cost. `live` runs the real LLM agents and is asserted equal to the oracle.
+   `test` grades via the `decide.py` oracle + deterministic receipt narration; zero network, zero
+   cost. `live` runs the bounded evidence episode and is asserted equal to the oracle.
 2. **Hard budgets, fail-closed:** `MAX_LLM_CALLS_PER_RUN=8`, `MAX_LLM_CALLS_PER_EVAL=40`,
    `MAX_AGENT_TRANSITIONS=6`. On breach → stop, mark `budget_guard_triggered`, record the partial run.
    (`MAX_AGENT_TRANSITIONS` is the same guard that stages/fixes the planner-loop failure mode.)
 3. **No LLM inside scorers** — scorers are pure functions of the run record. Enforced by review.
 4. **No LLM correction authorship** — `corrections.propose()` returns a structured object built by
    deterministic rules; the LLM may only summarize evidence for display.
-5. **Replay cache** (`stores/llm_cache.py`, keyed by `model + node + fixture_id + artifact_version`):
-   same inputs reuse the prior completion. Dev iteration costs nothing after the first live pass.
+5. **Replay cache** (`stores/llm_cache.py`, keyed by provider/model plus a pinned episode-input hash):
+   evidence is re-executed and result hashes are verified before reuse.
 6. **Cost ledger** — every run writes a `loopie.cost_ledger` row: `model, prompt_tokens,
    completion_tokens, total_tokens, estimated_cost, stop_reason, mode`. Surfaced in the cockpit.
 7. **Dry-run command** — `run_suite(mode="test")` executes the full pipeline (baseline → propose →
@@ -176,15 +176,15 @@ Add deps to `agent/pyproject.toml`: `weave`, `redis>=5`, `psycopg[binary]`. New 
 - **`llm.py`** — the ONLY model gateway. Honors `LOOPIE_LLM_MODE` (default `test`), enforces the
   per-run/per-eval call budgets, `temperature=0`+seed in live mode, and records `cost_ledger` rows.
   Nodes import from here; none call `ChatOpenAI` directly.
-- **`stores/llm_cache.py`** — replay cache keyed by `model+node+fixture_id+artifact_version`.
+- **`stores/llm_cache.py`** — replay cache keyed by provider/model + pinned episode-input hash.
 - **`decide.py`** — the **deterministic golden oracle**: pure functions mapping (ticket, retrieved
   artifacts) → expected graded `action`. Used by test mode + CI; `live` LLM-agent output is asserted
   equal to it on canonical cases (differential test). It is a reference, not a replacement for agents.
 - **`state.py`** — `LoopieState` TypedDict: `ticket`, `retrieved_memory`, `routing_decision`,
   `tool_calls[]`, `transitions`, `action`, `narration`, `trace[]` (the causality chain).
-- **`swarm.py`** — LangGraph `StateGraph`: `triage → memory_lookup → policy_check → resolution →
-  evaluator`, conditional back-edge guarded by `loopie:config:max_transitions` (stages + fixes
-  failure mode 3). Every node is a `@weave.op`. Register in `agent/langgraph.json` as graph
+- **`swarm.py`** — LangGraph `StateGraph`: `triage → context → resolution → execution →
+  evaluator`; only resolution is model-driven, while execution is policy-authorized and deterministic.
+  Every node is a `@weave.op`. Register in `agent/langgraph.json` as graph
   `loopie_swarm` (keep `sample_agent` too).
 - **`tools.py`** — simulated `refund_tool`, `escalate_tool`, `crm_lookup`. No real side effects.
 - **`stores/redis_store.py`** — live substrate get/set for memory/routing/config/prompt +

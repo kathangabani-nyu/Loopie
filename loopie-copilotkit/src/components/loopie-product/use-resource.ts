@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { LoopieEvent, subscribeLoopieEvents } from "./loopie-events";
 
-const REQUEST_TIMEOUT_MS = 12_000;
+const REQUEST_TIMEOUT_MS = 90_000;
 
 function eventMatchesPath(path: string, event: LoopieEvent): boolean {
   const resource = path.split("?", 1)[0];
@@ -21,12 +21,14 @@ export function useResource<T>(path: string, initial: T) {
   const [data, setData] = useState<T>(initial);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [waking, setWaking] = useState(false);
   const inFlight = useRef<AbortController | null>(null);
   const refresh = useCallback(async () => {
     if (inFlight.current) return;
     const controller = new AbortController();
     inFlight.current = controller;
     const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const wakingTimer = window.setTimeout(() => setWaking(true), 4_000);
     try {
       const response = await fetch(`/api/loopie/v1/${path}`, {
         cache: "no-store",
@@ -41,11 +43,13 @@ export function useResource<T>(path: string, initial: T) {
     } catch (cause) {
       setError(
         controller.signal.aborted
-          ? "Loopie API did not respond within 12 seconds. Check the local API process."
+          ? "Loopie API did not respond within 90 seconds. The hosted backend may still be waking; retry shortly."
           : cause instanceof Error ? cause.message : "request failed",
       );
     } finally {
       window.clearTimeout(timeout);
+      window.clearTimeout(wakingTimer);
+      setWaking(false);
       if (inFlight.current === controller) inFlight.current = null;
       setLoading(false);
     }
@@ -56,5 +60,5 @@ export function useResource<T>(path: string, initial: T) {
     if (eventMatchesPath(path, event)) void refresh();
   }), [path, refresh]);
   useEffect(() => () => inFlight.current?.abort(), []);
-  return { data, error, loading, refresh };
+  return { data, error, loading, waking, refresh };
 }

@@ -38,11 +38,15 @@ async def _runtime_parts():
         body="Please refund the purchase from five days ago.",
         channel="api",
         customer_ref="customer-1",
-        metadata={
+        facts={
             "days_since_purchase": 5,
             "customer_tier": "standard",
             "security_flag": False,
+            "amount_minor": None,
+            "currency": "USD",
+            "amount_source": "missing",
         },
+        metadata={},
         tags=["refund"],
     )
     return redis, repository, jobs, runs, ticket
@@ -79,6 +83,37 @@ def test_worker_executes_the_manifest_pinned_when_run_was_queued() -> None:
     _run(scenario())
 
 
+def test_ticket_update_after_queue_cannot_change_manifest_input() -> None:
+    async def scenario():
+        _, repository, _, runs, ticket = await _runtime_parts()
+        queued = await runs.queue_ticket_run(
+            ticket_id=ticket["id"], mode="test", idempotency_key="snapshot-v1"
+        )
+        await repository.create_ticket(
+            external_id="support-1",
+            subject="Changed",
+            body="This is a different ticket body.",
+            channel="api",
+            customer_ref="customer-1",
+            facts={
+                "customer_tier": "enterprise",
+                "days_since_purchase": 90,
+                "security_flag": True,
+                "amount_minor": 999,
+                "currency": "USD",
+                "amount_source": "explicit",
+            },
+            metadata={},
+            tags=["changed"],
+        )
+        manifest = await repository.get_run_manifest(queued["run"]["manifest_id"])
+        assert manifest is not None
+        assert manifest.ticket_snapshot["body"] == "Please refund the purchase from five days ago."
+        assert manifest.ticket_snapshot["facts"]["security_flag"] is False
+
+    _run(scenario())
+
+
 def test_run_queue_is_idempotent_for_client_retry() -> None:
     async def scenario():
         _, _, _, runs, ticket = await _runtime_parts()
@@ -92,7 +127,7 @@ def test_run_queue_is_idempotent_for_client_retry() -> None:
     _run(scenario())
 
 
-def test_golden_run_joins_annotation_only_after_execution_and_records_golden_failure() -> None:
+def test_golden_run_uses_pinned_annotation_and_records_golden_failure() -> None:
     async def scenario():
         _, repository, jobs, runs, ticket = await _runtime_parts()
         repository.golden_annotations[ticket["id"]] = {
@@ -149,14 +184,22 @@ def test_ticket_api_rejects_golden_label_leak_and_returns_202_run_handle() -> No
                 "external_id": "api-ticket",
                 "subject": "Refund",
                 "body": "Refund from day 3",
-                "metadata": {
-                    "days_since_purchase": 3,
-                    "customer_tier": "standard",
-                    "security_flag": False,
-                },
+                "days_since_purchase": 3,
+                "customer_tier": "standard",
+                "security_flag": False,
+                "amount_minor": 1_245_000,
+                "currency": "USD",
             },
         )
         assert ticket.status_code == 201
+        assert ticket.json()["facts"] == {
+            "customer_tier": "standard",
+            "days_since_purchase": 3,
+            "security_flag": False,
+            "amount_minor": 1_245_000,
+            "currency": "USD",
+            "amount_source": "explicit",
+        }
         ticket_id = ticket.json()["id"]
         queued = client.post(
             f"/api/v1/tickets/{ticket_id}/runs",
@@ -184,7 +227,7 @@ def test_jsonl_and_csv_document_imports_queue_every_ticket() -> None:
                 "format": "jsonl",
                 "content": (
                     '{"external_id":"jsonl-1","subject":"Refund","body":"Refund please",'
-                    '"metadata":{"days_since_purchase":2,"security_flag":false}}\n'
+                    '"customer_tier":"standard","days_since_purchase":2,"security_flag":false}\n'
                 ),
             },
         )
@@ -196,8 +239,8 @@ def test_jsonl_and_csv_document_imports_queue_every_ticket() -> None:
             json={
                 "format": "csv",
                 "content": (
-                    "external_id,subject,body,days_since_purchase,security_flag,tags\n"
-                    "csv-1,Billing help,Please review,4,false,billing;review\n"
+                    "external_id,subject,body,customer_tier,days_since_purchase,security_flag,tags\n"
+                    "csv-1,Billing help,Please review,standard,4,false,billing;review\n"
                 ),
             },
         )
