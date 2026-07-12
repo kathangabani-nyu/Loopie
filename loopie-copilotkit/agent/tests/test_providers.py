@@ -28,6 +28,7 @@ def test_gpt5_omits_temperature_and_seed_params():
     cfg = ProviderConfig(name="openai", base_url=None, api_key="k", model="gpt-5.5", enabled=True)
     kwargs = openai_client_kwargs(cfg)
     assert "temperature" not in kwargs
+    assert kwargs["reasoning_effort"] == "none"
     assert is_gpt5_model("gpt-5.5-2026-04-23") is True
 
 

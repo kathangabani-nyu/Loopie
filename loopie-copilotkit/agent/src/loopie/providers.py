@@ -93,7 +93,12 @@ def openai_client_kwargs(cfg: ProviderConfig) -> dict[str, Any]:
         "model": cfg.model,
         "api_key": cfg.api_key,
     }
-    if not is_gpt5_model(cfg.model):
+    if is_gpt5_model(cfg.model):
+        # GPT-5.6 Chat Completions rejects function tools when reasoning is enabled.
+        # Loopie's bounded resolver relies on function tools, so disable reasoning
+        # explicitly rather than silently changing the transport or agent contract.
+        kwargs["reasoning_effort"] = "none"
+    else:
         kwargs["temperature"] = 0
     if cfg.base_url:
         kwargs["base_url"] = cfg.base_url
