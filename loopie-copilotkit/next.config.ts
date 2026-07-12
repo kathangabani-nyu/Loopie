@@ -1,16 +1,6 @@
 import type { NextConfig } from "next";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-// Anchor Turbopack to this app — parent Loopie/ has no node_modules and breaks tailwindcss resolution.
-const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
-  output: "standalone",
-  turbopack: {
-    root: projectRoot,
-  },
-  outputFileTracingRoot: projectRoot,
   serverExternalPackages: ["@copilotkit/runtime"],
   env: {
     // The public Threads UI flag is DERIVED from the server-side license token.

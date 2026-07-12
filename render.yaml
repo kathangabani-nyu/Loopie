@@ -19,6 +19,8 @@ services:
         value: "true"
       - key: LOOPIE_PERSISTENCE_MODE
         value: hosted
+      - key: LOOPIE_ALLOW_INSECURE_REDIS
+        value: "1"
       - key: LOOPIE_JUDGE_ENABLED
         value: "false"
       - key: WEAVE_PROJECT
