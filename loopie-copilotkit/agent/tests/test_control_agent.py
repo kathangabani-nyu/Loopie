@@ -1,6 +1,7 @@
 """Control agent startup tests."""
 
 from src.loopie.control_agent import build_graph, chat_api_key_configured
+from memory_stores import MemoryLedger
 
 
 def test_build_graph_without_openai_key(monkeypatch):
@@ -12,5 +13,5 @@ def test_build_graph_without_openai_key(monkeypatch):
 
 def test_build_graph_with_openai_key(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    graph = build_graph()
+    graph = build_graph(ledger=MemoryLedger())
     assert graph is not None

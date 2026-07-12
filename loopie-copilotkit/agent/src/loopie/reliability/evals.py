@@ -131,7 +131,7 @@ def _artifact_proof_bundle(
     artifact_proof: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Reuse approval-time proof when available; otherwise derive from ledger history."""
-    from src.loopie.artifacts import artifact_value_hash, build_artifact_proof
+    from src.loopie.artifacts import build_artifact_proof
 
     if artifact_proof and artifact_proof.get("after_hash"):
         return {

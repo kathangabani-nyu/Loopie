@@ -1,16 +1,16 @@
-"""CopilotKit control agent for the Loopie cockpit."""
+"""CopilotKit assistant over the durable Loopie v1 product API."""
 
 from __future__ import annotations
 
 import os
+import uuid
 from typing import Any
+from urllib.parse import quote
 
 import httpx
-from copilotkit import CopilotKitMiddleware, StateStreamingMiddleware, StateItem
+from copilotkit import CopilotKitMiddleware
 from langchain.agents import create_agent
 from langchain.tools import tool
-from langgraph.types import Command
-from typing_extensions import TypedDict
 
 from src.loopie.chat_cost import (
     ChatBudgetExceeded,
@@ -26,150 +26,113 @@ API_BASE = os.getenv("LOOPIE_API_BASE", "http://localhost:8001").rstrip("/")
 _HTTP_TIMEOUT = 120.0
 
 
-class LoopieControlState(TypedDict, total=False):
-    runs: dict[str, Any]
-    currentFailure: dict[str, Any] | None
-    proposedCorrections: list[dict[str, Any]]
-    artifactHistory: list[dict[str, Any]]
-    artifactProof: dict[str, Any] | None
-    evalDelta: dict[str, Any]
-    counterfactual: dict[str, Any]
-    weaveEvalBaseline: dict[str, Any]
-    weaveEvalPatched: dict[str, Any]
-    events: list[dict[str, Any]]
-    budget: dict[str, Any]
-    operationTimings: list[dict[str, Any]]
-    approvalState: str
-    preflight: dict[str, Any]
-
-
 def chat_api_key_configured() -> bool:
-    cfg = resolve_provider("supervisory") or provider_registry()["openai"]
-    return bool(cfg.api_key and str(cfg.api_key).strip())
+    provider = resolve_provider("supervisory") or provider_registry()["openai"]
+    return bool(provider.api_key and str(provider.api_key).strip())
 
 
-def _api_get(path: str) -> dict[str, Any]:
-    with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
+def _headers(extra: dict[str, str] | None = None) -> dict[str, str]:
+    headers = dict(extra or {})
+    api_token = os.getenv("LOOPIE_API_TOKEN", "")
+    if api_token:
+        headers["Authorization"] = f"Bearer {api_token}"
+    return headers
+
+
+def _api_get(path: str) -> Any:
+    with httpx.Client(timeout=_HTTP_TIMEOUT, headers=_headers()) as client:
         response = client.get(f"{API_BASE}{path}")
         response.raise_for_status()
         return response.json()
 
 
-def _api_post(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-    with httpx.Client(timeout=_HTTP_TIMEOUT) as client:
+def _api_post(path: str, body: dict[str, Any] | None = None, *, idempotency_key: str | None = None) -> Any:
+    headers = _headers({"Idempotency-Key": idempotency_key} if idempotency_key else None)
+    with httpx.Client(timeout=_HTTP_TIMEOUT, headers=headers) as client:
         response = client.post(f"{API_BASE}{path}", json=body or {})
         response.raise_for_status()
         return response.json()
 
 
-def _sync_state() -> dict[str, Any]:
-    return _api_get("/state")
+@tool
+def list_tickets(limit: int = 20) -> list[dict[str, Any]]:
+    """List recent production support tickets."""
+    return _api_get(f"/api/v1/tickets?limit={min(max(limit, 1), 100)}")
 
 
-def _state_items() -> list[StateItem]:
-    keys = (
-        "runs",
-        "currentFailure",
-        "proposedCorrections",
-        "artifactHistory",
-        "artifactProof",
-        "evalDelta",
-        "counterfactual",
-        "weaveEvalBaseline",
-        "weaveEvalPatched",
-        "events",
-        "budget",
-        "operationTimings",
-        "approvalState",
-        "preflight",
+@tool
+def list_runs(limit: int = 20) -> list[dict[str, Any]]:
+    """List durable runs and their explicit lifecycle status."""
+    return _api_get(f"/api/v1/runs?limit={min(max(limit, 1), 100)}")
+
+
+@tool
+def get_run(run_id: str) -> dict[str, Any]:
+    """Inspect one run, including its decision, correctness layers, manifest, and read set."""
+    return _api_get(f"/api/v1/runs/{quote(run_id, safe='')}")
+
+
+@tool
+def list_failures(limit: int = 20) -> list[dict[str, Any]]:
+    """List authoritative deterministic failure records."""
+    return _api_get(f"/api/v1/failures?limit={min(max(limit, 1), 100)}")
+
+
+@tool
+def queue_ticket_run(ticket_id: str, mode: str = "live") -> dict[str, Any]:
+    """Queue an idempotent run for an existing ticket; returns durable run and job handles."""
+    if mode not in {"test", "live"}:
+        raise ValueError("mode must be test or live")
+    return _api_post(
+        f"/api/v1/tickets/{quote(ticket_id, safe='')}/runs",
+        {"mode": mode, "kind": "ticket"},
+        idempotency_key=f"assistant:{ticket_id}:{uuid.uuid4()}",
     )
-    return [StateItem(state_key=key, tool="*", tool_argument=key) for key in keys]
-
-
-def _command_after(result: dict[str, Any]) -> Command:
-    try:
-        state = _sync_state()
-    except Exception:
-        state = {}
-    return Command(update={**state, "lastToolResult": result})
 
 
 @tool
-def get_state() -> dict[str, Any]:
-    """Read the full Loopie cockpit state from the REST API."""
-    return _sync_state()
+def propose_failure_correction(failure_id: str) -> dict[str, Any]:
+    """Build and shadow-evaluate a validated correction for a known failure."""
+    return _api_post(f"/api/v1/failures/{quote(failure_id, safe='')}/corrections")
 
 
 @tool
-def reset_demo() -> Command:
-    """Wipe Redis + Postgres back to a clean slate and reseed baseline artifacts."""
-    return _command_after(_api_post("/reset"))
+def approve_correction(correction_id: str, human_confirmation: str) -> dict[str, Any]:
+    """Apply a shadow-passing correction only after the human types APPROVE <correction_id>."""
+    if human_confirmation.strip() != f"APPROVE {correction_id}":
+        raise ValueError(f"Explicit confirmation required: APPROVE {correction_id}")
+    return _api_post(
+        f"/api/v1/corrections/{quote(correction_id, safe='')}/approve",
+        {"actor": "owner", "channel": "hitl_chat"},
+    )
 
 
 @tool
-def seed() -> Command:
-    """Seed Redis and Postgres with baseline flawed artifacts."""
-    return _command_after(_api_post("/seed"))
+def get_artifacts() -> list[dict[str, Any]]:
+    """Read Postgres artifact Time Machine records and current versions."""
+    return _api_get("/api/v1/artifacts")
 
 
 @tool
-def run_baseline(case_id: str = "security_001") -> Command:
-    """Run baseline eval for a case (defaults to security_001 hero)."""
-    return _command_after(_api_post("/run/baseline", {"case_id": case_id}))
+def get_judge_calibration() -> dict[str, Any]:
+    """Read judge agreement against golden annotations; judge flags are advisory only."""
+    return _api_get("/api/v1/judge/calibration")
 
 
-@tool
-def propose_corrections() -> Command:
-    """Propose a structured correction for the current failure."""
-    return _command_after(_api_post("/corrections/propose"))
-
-
-@tool
-def approve_correction(correction_id: str) -> Command:
-    """Approve and apply a proposed correction by id."""
-    return _command_after(_api_post("/corrections/approve", {"correction_id": correction_id}))
-
-
-@tool
-def run_patched(case_id: str = "security_001") -> Command:
-    """Rerun the case after correction approval."""
-    return _command_after(_api_post("/run/patched", {"case_id": case_id}))
-
-
-@tool
-def counterfactual_replay(hero_case_id: str = "security_001") -> Command:
-    """Replay hero case and neighbors to prove no regression."""
-    return _command_after(_api_post("/counterfactual", {"hero_case_id": hero_case_id}))
-
-
-@tool
-def get_artifact_history(key: str) -> list[dict[str, Any]]:
-    """Return Postgres artifact version history for a key."""
-    return _api_get(f"/artifacts/{key}")
-
-
-@tool
-def get_budget_status() -> dict[str, Any]:
-    """Return token/cost budget status for the current pipeline."""
-    return _api_get("/budget")
-
-
-control_tools = [
-    get_state,
-    reset_demo,
-    seed,
-    run_baseline,
-    propose_corrections,
+CONTROL_TOOLS = [
+    list_tickets,
+    list_runs,
+    get_run,
+    list_failures,
+    queue_ticket_run,
+    propose_failure_correction,
     approve_correction,
-    run_patched,
-    counterfactual_replay,
-    get_artifact_history,
-    get_budget_status,
+    get_artifacts,
+    get_judge_calibration,
 ]
 
 
-def build_unconfigured_chat_graph(reason: str):
-    """Start without OpenAI so Render health checks pass until secrets are set."""
+def build_unconfigured_chat_graph(reason: str, *, checkpointer=None):
     from langchain_core.messages import AIMessage
     from langgraph.graph import END, START, MessagesState, StateGraph
 
@@ -177,68 +140,50 @@ def build_unconfigured_chat_graph(reason: str):
         prior = state.get("messages", [])
         if prior and getattr(prior[-1], "type", "") == "ai":
             return {}
-        return {
-            "messages": [
-                AIMessage(
-                    content=(
-                        f"{reason} "
-                        "Set OPENAI_API_KEY on the loopie-agent Render service to enable live GPT chat. "
-                        "The reliability cockpit buttons still run the deterministic proof via loopie-api."
-                    )
-                )
-            ]
-        }
+        return {"messages": [AIMessage(content=f"{reason} Configure OPENAI_API_KEY on loopie-api.")]}
 
     builder = StateGraph(MessagesState)
     builder.add_node("unavailable", unavailable)
     builder.add_edge(START, "unavailable")
     builder.add_edge("unavailable", END)
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)
 
 
-def build_control_agent():
+def build_control_agent(*, ledger: Ledger | None = None, checkpointer=None):
     from langchain_openai import ChatOpenAI
 
     if not chat_api_key_configured():
-        return build_unconfigured_chat_graph("Live chat is not configured.")
-
-    ledger = Ledger.connect(strict=False)
-    cost_callback = LedgerCostCallback(ledger=ledger)
-    cfg = resolve_provider("supervisory") or provider_registry()["openai"]
-    kwargs = openai_client_kwargs(cfg)
-    if not is_gpt5_model(cfg.model):
+        return build_unconfigured_chat_graph("Live assistant is not configured.", checkpointer=checkpointer)
+    ledger = ledger or Ledger.connect(strict=False)
+    callback = LedgerCostCallback(ledger=ledger)
+    provider = resolve_provider("supervisory") or provider_registry()["openai"]
+    kwargs = openai_client_kwargs(provider)
+    if not is_gpt5_model(provider.model):
         kwargs["model_kwargs"] = {"parallel_tool_calls": False}
-
-    model = ChatOpenAI(**kwargs).with_config(
-        callbacks=[cost_callback],
-        run_name="loopie_control_chat",
-    )
-
+    model = ChatOpenAI(**kwargs).with_config(callbacks=[callback], run_name="loopie_control_chat")
     return create_agent(
         model=model,
-        tools=control_tools,
-        middleware=[
-            CopilotKitMiddleware(),
-            StateStreamingMiddleware(*_state_items()),
-        ],
-        state_schema=LoopieControlState,
+        tools=CONTROL_TOOLS,
+        middleware=[CopilotKitMiddleware()],
+        checkpointer=checkpointer,
         system_prompt=(
-            "You are the Loopie control agent. Use tools to read state, seed, run baseline, propose corrections, "
-            "approve corrections, rerun patched evals, and counterfactual replay. "
-            f"Live chat is metered (cap ${max_chat_cost_usd():.0f}). Keep responses brief. "
-            f"If chat budget is exceeded, reply exactly: "
+            "You are Loopie's reliability assistant. Read durable records before making claims. "
+            "A deterministic policy/structural/golden failure is authoritative; judge flags are advisory. "
+            "You may prepare a correction, but never call approve_correction unless the user explicitly "
+            "typed the exact confirmation phrase in this conversation. Never invent score improvement. "
+            f"Chat is metered (cap ${max_chat_cost_usd():.0f}). If exceeded, reply exactly: "
             f"{budget_degraded_message(max_chat_cost_usd(), max_chat_cost_usd())}"
         ),
     )
 
 
-def build_graph():
+def build_graph(*, ledger: Ledger | None = None, checkpointer=None):
     try:
-        return build_control_agent()
+        return build_control_agent(ledger=ledger, checkpointer=checkpointer)
     except ChatBudgetExceeded as exc:
-        return build_unconfigured_chat_graph(handle_chat_budget_error(exc))
+        return build_unconfigured_chat_graph(handle_chat_budget_error(exc), checkpointer=checkpointer)
     except Exception as exc:
-        return build_unconfigured_chat_graph(f"Live chat failed to start: {exc}")
+        return build_unconfigured_chat_graph(f"Live assistant failed to start: {exc}", checkpointer=checkpointer)
 
 
 graph = build_graph()

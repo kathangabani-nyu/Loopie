@@ -150,6 +150,27 @@ def weave_traces_url(*, entity: str | None = None, project: str | None = None) -
     return f"https://wandb.ai/{entity}/{project}/weave/traces"
 
 
+def current_weave_call_evidence() -> dict[str, str] | None:
+    """Capture durable call identifiers while executing inside a Weave op."""
+
+    if not weave_tracing_enabled() or _weave is None:
+        return None
+    try:
+        call = _weave.get_current_call()
+        if call is None:
+            return None
+        evidence = {
+            "call_id": str(call.id),
+            "trace_id": str(call.trace_id),
+        }
+        dashboard = weave_traces_url()
+        if dashboard:
+            evidence["dashboard_url"] = dashboard
+        return evidence
+    except Exception:
+        return None
+
+
 def op(name: str) -> Callable[[F], F]:
     """Decorate with weave.op when LOOPIE_WEAVE_ENABLED and W&B creds are present."""
 

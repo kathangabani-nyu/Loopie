@@ -57,7 +57,7 @@ def provider_registry() -> dict[str, ProviderConfig]:
             name="openai",
             base_url=os.getenv("OPENAI_BASE_URL"),
             api_key=openai_key,
-            model=os.getenv("LOOPIE_OPENAI_MODEL", "gpt-4o-mini"),
+            model=os.getenv("LOOPIE_OPENAI_MODEL", "gpt-5.6-luna"),
             enabled=_enabled("openai", bool(openai_key)),
         ),
         "cursor": ProviderConfig(

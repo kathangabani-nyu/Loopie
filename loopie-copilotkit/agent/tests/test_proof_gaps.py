@@ -2,74 +2,16 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import pytest
 
+from memory_stores import MemoryLedger, MemoryRedis
 from src.loopie.config import get_settings
 from src.loopie.reliability.corrections import SECURITY_GUARD
 from src.loopie.reliability.evals import evaluate_suite
 from src.loopie.runner import seed_baseline
-from src.loopie.stores.ledger import Ledger
 from src.loopie.stores.llm_cache import cache_key, clear_cache, get_cached, set_cached
-from src.loopie.stores.redis_store import RedisStore
-
-
-class MemoryRedis(RedisStore):
-    def __init__(self) -> None:
-        self._data: dict[str, str] = {}
-        self._streams: dict[str, list] = {}
-
-    def ping(self) -> bool:
-        return True
-
-    def set_memory(self, key, value, version=1):
-        import json
-
-        self._data[f"memory:{key}"] = json.dumps({"value": value, "version": version})
-
-    def get_memory(self, key):
-        import json
-
-        raw = self._data.get(f"memory:{key}")
-        return json.loads(raw) if raw else None
-
-    def set_routing_rules(self, rules):
-        import json
-
-        self._data["routing:rules"] = json.dumps(rules)
-
-    def get_routing_rules(self):
-        import json
-
-        raw = self._data.get("routing:rules")
-        return json.loads(raw) if raw else []
-
-    def set_config(self, key, value):
-        self._data[f"config:{key}"] = str(value)
-
-    def get_config(self, key, default=None):
-        return self._data.get(f"config:{key}", default)
-
-    def get_live_artifacts(self):
-        memory_raw = self.get_memory("policy:refund_window")
-        memory = {}
-        if memory_raw:
-            memory["policy:refund_window"] = memory_raw.get("value", "")
-        return {
-            "memory": memory,
-            "routing_rules": self.get_routing_rules(),
-            "max_transitions": int(self.get_config("max_transitions", "6") or "6"),
-        }
-
-    def xadd(self, stream, fields):
-        self._streams.setdefault(stream, []).append(fields)
-        return "1-0"
-
-    def xread_recent(self, stream, count=50):
-        return self._streams.get(stream, [])[-count:]
-
-    def flush_loopie_keys(self):
-        self._data.clear()
-        self._streams.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -78,14 +20,6 @@ def test_mode(monkeypatch):
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
-
-
-class MemoryLedger(Ledger):
-    def __init__(self):
-        super().__init__(url="postgresql://invalid", _memory_rows=[], _memory_costs=[])
-
-    def ensure_schema(self):
-        return None
 
 
 def test_baseline_eval_rewinds_artifacts_after_correction():
@@ -133,6 +67,17 @@ def test_weave_eval_error_is_surfaced_not_silent(monkeypatch):
     monkeypatch.setenv("LOOPIE_WEAVE_ENABLED", "true")
     monkeypatch.setenv("WANDB_API_KEY", "test-key")
     get_settings.cache_clear()
+    monkeypatch.setattr("src.loopie.reliability.evals.ensure_weave", lambda: None)
+
+    class StubEvaluation:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def evaluate(self, _predictor):
+            return None
+
+    monkeypatch.setattr("weave.Evaluation", StubEvaluation)
+    monkeypatch.setattr("weave.attributes", lambda _attrs: nullcontext())
 
     redis = MemoryRedis()
     ledger = MemoryLedger()
@@ -172,69 +117,33 @@ def test_weave_tracing_requires_explicit_flag(monkeypatch):
     assert weave_tracing_enabled() is False
 
 
-@pytest.mark.integration
-def test_run_suite_live_fails_when_whitelist_case_used_fallback(monkeypatch):
-    from src.loopie.decide import decide_action
-    from src.loopie.llm import LLMDecisionResult, LLMGateway, LLMResult
+def test_live_honesty_gate_fails_when_any_case_used_oracle_fallback():
     from src.loopie.pipeline import LoopiePipeline
+    from src.loopie.reliability.scorers import live_decision_honest
 
-    monkeypatch.setenv("LOOPIE_LLM_MODE", "live")
-    monkeypatch.setenv("LOOPIE_LIVE_CONFIRMED", "1")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    get_settings.cache_clear()
+    fallback_run = {
+        "case_id": "security_001",
+        "mode": "live",
+        "decided_by": "oracle_fallback",
+        "fallback_used": True,
+    }
+    honest_run = {
+        "case_id": "refund_001",
+        "mode": "live",
+        "decided_by": "llm",
+        "fallback_used": False,
+    }
+    tickets = {
+        "security_001": {"case_id": "security_001"},
+        "refund_001": {"case_id": "refund_001"},
+    }
 
-    def _stub_narrate(self, *, node, fixture_id, artifact_version, ticket=None, artifacts=None):
-        return LLMResult(
-            text=f"live {node}",
-            mode="live",
-            model="gpt-4o-mini",
-            prompt_tokens=0,
-            completion_tokens=0,
-            total_tokens=0,
-            estimated_cost_usd=0.0,
-            stop_reason="test",
-        )
-
-    monkeypatch.setattr(LLMGateway, "narrate", _stub_narrate)
-
-    def _skip_eval(**_kwargs):
-        return {
-            "label": _kwargs.get("label"),
-            "results": [],
-            "weave_eval_error": None,
-            "weave_eval_id": None,
-        }
-
-    monkeypatch.setattr("src.loopie.reliability.evals.evaluate_suite", _skip_eval)
-
-    original_decide = LLMGateway.decide
-
-    def _fallback_decide(self, ticket, artifacts, *, fixture_id, artifact_version):
-        oracle = decide_action(ticket, artifacts)
-        if ticket.get("case_id") in {"security_001", "refund_001", "security_002", "security_003"}:
-            return LLMDecisionResult(
-                action=oracle,
-                mode="live",
-                model="gpt-4o-mini",
-                decided_by="oracle_fallback",
-                fallback_used=True,
-                security_guard_observed=False,
-                artifact_basis=[],
-                reason="forced fallback for test",
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-                estimated_cost_usd=0.0,
-                stop_reason="test",
-            )
-        return original_decide(self, ticket, artifacts, fixture_id=fixture_id, artifact_version=artifact_version)
-
-    monkeypatch.setattr(LLMGateway, "decide", _fallback_decide)
-
-    pipeline = LoopiePipeline()
-    pipeline.redis = MemoryRedis()
-    pipeline.ledger = MemoryLedger()
-
-    result = pipeline.run_suite(mode="live", reset=True)
-    assert result["live_fallback_cases"]
-    assert result["ok"] is False
+    assert LoopiePipeline._collect_live_fallback_cases(fallback_run, honest_run) == [
+        "security_001"
+    ]
+    assert LoopiePipeline._collect_dishonest_live_cases(
+        fallback_run,
+        honest_run,
+        tickets=tickets,
+    ) == ["security_001"]
+    assert live_decision_honest(fallback_run, tickets["security_001"]) is False

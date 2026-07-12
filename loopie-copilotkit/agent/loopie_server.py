@@ -1,112 +1,108 @@
-"""Minimal HTTP API for Loopie cockpit actions."""
+"""Loopie product API, durable worker, SSE, and native AG-UI composition root."""
 
 from __future__ import annotations
 
+import hmac
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-from src.loopie.pipeline import LoopiePipeline
+from src.loopie.api.v1 import router as v1_router
+from src.loopie.checkpointing import get_checkpoint_runtime
+from src.loopie.config import get_settings
+from src.loopie.copilot_endpoint import mount_copilotkit
+from src.loopie.observability import ensure_weave
 from src.loopie.preflight import run_preflight
+from src.loopie.runner import seed_baseline
+from src.loopie.runtime import RuntimeServices, build_runtime
+from src.loopie.winloop import ensure_selector_event_loop_policy
 
-_pipeline: LoopiePipeline | None = None
-
-
-def get_pipeline() -> LoopiePipeline:
-    global _pipeline
-    if _pipeline is None:
-        _pipeline = LoopiePipeline()
-    return _pipeline
+# Must run before any event loop is created (i.e. before uvicorn/asyncio
+# start serving) — see winloop.py for why.
+ensure_selector_event_loop_policy()
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
-    pipeline = get_pipeline()
-    _app.state.preflight = pipeline.preflight
-    yield
+async def lifespan(app: FastAPI):
+    ensure_weave()
+    checkpoints = get_checkpoint_runtime()
+    await checkpoints.start()
+    runtime = build_runtime(checkpoints)
+    app.state.runtime = runtime
+    await runtime.start()
+    try:
+        yield
+    finally:
+        await runtime.close()
+        await checkpoints.close()
 
 
-app = FastAPI(title="Loopie API", lifespan=lifespan)
+app = FastAPI(title="Loopie API", version="2.0", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[get_settings().ui_origin],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Last-Event-ID", "Idempotency-Key"],
+)
+app.include_router(v1_router)
 
 
-class ActionRequest(BaseModel):
-    case_id: str = "security_001"
-    correction_id: str | None = None
-    hero_case_id: str = "security_001"
-    key: str = "routing:rules"
+def _runtime(request: Request) -> RuntimeServices:
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="application runtime is not ready")
+    return runtime
+
+
+@app.middleware("http")
+async def service_auth(request: Request, call_next):
+    if request.method == "OPTIONS" or request.url.path == "/health":
+        return await call_next(request)
+    settings = get_settings()
+    if not settings.api_token:
+        if not settings.hosted:
+            return await call_next(request)
+        return JSONResponse({"error": "service authentication is not configured"}, status_code=503)
+    scheme, _, candidate = request.headers.get("Authorization", "").partition(" ")
+    if scheme.lower() != "bearer" or not hmac.compare_digest(candidate, settings.api_token):
+        return JSONResponse({"error": "invalid service credentials"}, status_code=401)
+    return await call_next(request)
 
 
 @app.get("/health")
-def health():
-    pipeline = get_pipeline()
-    preflight = run_preflight(redis=pipeline.redis, ledger=pipeline.ledger)
+def health(request: Request):
+    runtime = _runtime(request)
+    report = run_preflight(redis=runtime.stores.redis, ledger=runtime.stores.ledger)
     return {
-        "status": "ok" if preflight["ok"] else "degraded",
-        "ok": preflight["ok"],
-        "hosted": preflight["hosted"],
-        "persistence_mode": preflight["persistence_mode"],
-        "provider_mode": preflight["provider_mode"],
-        "llm_mode": preflight["llm_mode"],
+        "status": "ok" if report["ok"] else "degraded",
+        "ok": report["ok"],
+        "hosted": report["hosted"],
+        "persistence_mode": report["persistence_mode"],
+        "provider_mode": report["provider_mode"],
+        "llm_mode": report["llm_mode"],
     }
 
 
 @app.get("/preflight")
-def preflight():
-    pipeline = get_pipeline()
-    report = run_preflight(redis=pipeline.redis, ledger=pipeline.ledger)
+def preflight(request: Request):
+    runtime = _runtime(request)
+    report = run_preflight(redis=runtime.stores.redis, ledger=runtime.stores.ledger)
     if report["hosted"] and not report["ok"]:
         raise HTTPException(status_code=503, detail=report)
     return report
 
 
-@app.post("/reset")
-def reset():
-    return get_pipeline().reset()
+@app.post("/admin/reset")
+def reset(request: Request):
+    if not get_settings().enable_admin_reset:
+        raise HTTPException(status_code=404, detail="admin reset is disabled")
+    runtime = _runtime(request)
+    runtime.stores.redis.flush_loopie_keys()
+    runtime.stores.ledger.reset()
+    return {"reset": True, **seed_baseline(redis=runtime.stores.redis, ledger=runtime.stores.ledger)}
 
 
-@app.post("/seed")
-def seed():
-    return get_pipeline().seed()
-
-
-@app.post("/run/baseline")
-def run_baseline(body: ActionRequest):
-    return get_pipeline().run_baseline(case_id=body.case_id)
-
-
-@app.post("/corrections/propose")
-def propose():
-    return get_pipeline().propose_corrections()
-
-
-@app.post("/corrections/approve")
-def approve(body: ActionRequest):
-    if not body.correction_id:
-        return {"error": "correction_id required"}
-    return get_pipeline().approve_correction(body.correction_id)
-
-
-@app.post("/run/patched")
-def run_patched(body: ActionRequest):
-    return get_pipeline().run_patched(case_id=body.case_id)
-
-
-@app.post("/counterfactual")
-def counterfactual(body: ActionRequest):
-    return get_pipeline().counterfactual_replay_suite(hero_case_id=body.hero_case_id)
-
-
-@app.get("/state")
-def state():
-    return get_pipeline().export_state()
-
-
-@app.get("/artifacts/{key:path}")
-def artifacts(key: str):
-    return get_pipeline().get_artifact_history(key)
-
-
-@app.get("/budget")
-def budget():
-    return get_pipeline().get_budget_status()
+mount_copilotkit(app)

@@ -4,13 +4,14 @@ import "./globals.css";
 import "@copilotkit/react-core/v2/styles.css";
 
 import { CopilotKit } from "@copilotkit/react-core/v2";
+import { usePathname } from "next/navigation";
 import { ThemeProvider } from "@/hooks/use-theme";
-// A2UI catalog: definitions + renderers in ./declarative-generative-ui/
-import { demonstrationCatalog } from "./declarative-generative-ui/renderers";
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const pathname = usePathname();
+
   return (
     <html lang="en">
       <head>
@@ -19,15 +20,16 @@ export default function RootLayout({
       </head>
       <body className={`antialiased`}>
         <ThemeProvider>
-          <CopilotKit
-            runtimeUrl="/api/copilotkit"
-            inspectorDefaultAnchor={{ horizontal: "right", vertical: "top" }}
-            a2ui={{ catalog: demonstrationCatalog }}
-            openGenerativeUI={{}}
-            useSingleEndpoint={false}
-          >
-            {children}
-          </CopilotKit>
+          {pathname === "/login" ? children : (
+            <CopilotKit
+              runtimeUrl="/api/copilotkit"
+              agent="loopie_control"
+              showDevConsole={false}
+              useSingleEndpoint={false}
+            >
+              {children}
+            </CopilotKit>
+          )}
         </ThemeProvider>
       </body>
     </html>

@@ -1,4 +1,9 @@
-"""End-to-end Loopie pipeline orchestration."""
+"""Golden regression harness for the original deterministic demo contract.
+
+Production requests never import this module; they use services.RunService and
+services.ApprovalService. The harness remains only to prove historical golden
+behavior and the cross-phase fail/correct/rerun invariant in CI.
+"""
 
 from __future__ import annotations
 
@@ -11,12 +16,16 @@ from typing import Any, Callable, Iterator, TypeVar
 from src.loopie.artifacts import apply_seed_artifacts_to_redis
 from src.loopie.config import get_settings
 from src.loopie.reliability.classifier import classify_failure
-from src.loopie.reliability.corrections import apply
+from src.loopie.reliability.corrections import (
+    apply,
+    prepare_correction,
+    shadow_evaluate_correction,
+)
 from src.loopie.reliability.diagnosis import agentic_diagnosis
 from src.loopie.reliability.scorers import live_decision_honest, oracle_match
 from src.loopie.reliability.replay import counterfactual_replay
 from src.loopie.reliability.scorers import run_passed, score_run
-from src.loopie.runner import LIVE_DECISION_CASES, load_tickets, run_ticket, seed_baseline, tickets_by_id
+from src.loopie.runner import run_ticket, seed_baseline, tickets_by_id
 from src.loopie.preflight import run_preflight
 from src.loopie.runtime_budget import build_export_budget
 from src.loopie.stores.ledger import Ledger
@@ -201,6 +210,19 @@ class LoopiePipeline:
             if not failure:
                 return {"error": "no_current_failure"}
             correction = agentic_diagnosis(failure)
+            shadow = shadow_evaluate_correction(
+                correction,
+                tickets=tickets_by_id(),
+                redis=self.redis,
+                ledger=self.ledger,
+            )
+            correction = prepare_correction(
+                correction,
+                ledger=self.ledger,
+                shadow_passed=bool(shadow["passed"]),
+                shadow_eval_run_id=shadow["id"],
+                shadow_result=shadow,
+            )
             self.state["proposedCorrections"] = [correction]
             self.state["approvalState"] = "pending"
             return correction
@@ -343,8 +365,6 @@ class LoopiePipeline:
             if not run:
                 continue
             case_id = run.get("case_id", "")
-            if case_id not in LIVE_DECISION_CASES:
-                continue
             if run.get("decided_by") != "llm":
                 continue
             if run.get("cache_hit"):
@@ -406,7 +426,7 @@ class LoopiePipeline:
             result["case_id"]
             for suite in (eval_baseline, eval_patched)
             for result in (suite or {}).get("results", [])
-            if result.get("case_id") in LIVE_DECISION_CASES and result.get("fallback_used")
+            if result.get("fallback_used")
         ]
         live_fallback_cases = sorted(set(live_fallback_cases + eval_fallback_cases))
         ticket_map = tickets_by_id()

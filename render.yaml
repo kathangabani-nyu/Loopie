@@ -1,23 +1,27 @@
 services:
   - type: web
     name: loopie-api
-    runtime: python
-    rootDir: loopie-copilotkit/agent
-    plan: free
-    buildCommand: pip install uv && uv sync --frozen
-    startCommand: uv run uvicorn loopie_server:app --host 0.0.0.0 --port $PORT
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./loopie-copilotkit/agent/Dockerfile
+    dockerContext: ./loopie-copilotkit/agent
+    preDeployCommand: alembic upgrade head
     healthCheckPath: /health
     envVars:
       - key: LOOPIE_HOSTED
         value: "1"
       - key: LOOPIE_LLM_MODE
-        value: test
+        value: live
+      - key: LOOPIE_LIVE_CONFIRMED
+        value: "1"
       - key: LOOPIE_WEAVE_ENABLED
         value: "true"
       - key: LOOPIE_FULL_AGENTIC
-        value: "false"
+        value: "true"
       - key: LOOPIE_PERSISTENCE_MODE
         value: hosted
+      - key: LOOPIE_JUDGE_ENABLED
+        value: "false"
       - key: WEAVE_PROJECT
         value: loopie
       - key: REDIS_URL
@@ -30,31 +34,9 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
-
-  - type: web
-    name: loopie-agent
-    runtime: python
-    rootDir: loopie-copilotkit/agent
-    plan: free
-    buildCommand: pip install uv && uv sync --frozen
-    startCommand: uv run langgraph dev --host 0.0.0.0 --port $PORT --no-browser
-    healthCheckPath: /ok
-    envVars:
-      - key: LOOPIE_HOSTED
-        value: "1"
-      - key: LOOPIE_LLM_MODE
-        value: test
-      - key: LOOPIE_OPENAI_MODEL
-        value: gpt-5.5
-      - key: LOOPIE_MAX_CHAT_COST_USD
-        value: "40"
-      - key: LOOPIE_API_BASE
-        value: https://loopie-api.onrender.com
-      - key: LOOPIE_PERSISTENCE_MODE
-        value: hosted
-      - key: REDIS_URL
+      - key: LOOPIE_API_TOKEN
         sync: false
-      - key: POSTGRES_URL
+      - key: LOOPIE_UI_ORIGIN
         sync: false
-      - key: OPENAI_API_KEY
-        sync: false
+      - key: LOOPIE_ENABLE_ADMIN_RESET
+        value: "false"

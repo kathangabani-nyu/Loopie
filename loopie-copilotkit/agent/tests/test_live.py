@@ -8,7 +8,7 @@ import pytest
 
 from src.loopie.config import get_settings
 from src.loopie.decide import decide_action
-from src.loopie.runner import LIVE_DECISION_CASES, run_ticket, seed_baseline, tickets_by_id
+from src.loopie.runner import run_ticket, seed_baseline, tickets_by_id
 from src.loopie.stores.llm_cache import cache_key, clear_cache, get_cached, set_cached
 from src.loopie.stores.redis_store import RedisStore
 
@@ -43,6 +43,17 @@ class MemoryRedis(RedisStore):
         raw = self._data.get("routing:rules")
         return json.loads(raw) if raw else []
 
+    def set_policy_rules(self, rules):
+        import json
+
+        self._data["policy:rules"] = json.dumps(rules)
+
+    def get_policy_rules(self):
+        import json
+
+        raw = self._data.get("policy:rules")
+        return json.loads(raw) if raw else []
+
     def set_config(self, key, value):
         self._data[f"config:{key}"] = str(value)
 
@@ -67,6 +78,12 @@ class MemoryRedis(RedisStore):
     def xread_recent(self, stream, count=50):
         return self._streams.get(stream, [])[-count:]
 
+    def get_llm_cache(self, cache_key):
+        return self._data.get(f"llm-cache:{cache_key}")
+
+    def set_llm_cache(self, cache_key, value, ttl_seconds=86_400):
+        self._data[f"llm-cache:{cache_key}"] = value
+
     def flush_loopie_keys(self):
         self._data.clear()
         self._streams.clear()
@@ -84,6 +101,7 @@ live_opt_in = pytest.mark.skipif(
 
 
 @pytest.mark.integration
+@pytest.mark.live
 @live_opt_in
 def test_live_decision_equals_oracle_on_hero_and_neighbors(monkeypatch, memory_redis):
     monkeypatch.setenv("LOOPIE_LLM_MODE", "live")
@@ -103,7 +121,7 @@ def test_live_decision_equals_oracle_on_hero_and_neighbors(monkeypatch, memory_r
 
     seed_baseline(redis=memory_redis, ledger=MemoryLedger())
 
-    for case_id in sorted(LIVE_DECISION_CASES):
+    for case_id in sorted(tickets_by_id()):
         ticket = tickets_by_id()[case_id]
         artifacts = memory_redis.get_live_artifacts()
         oracle = decide_action(ticket, artifacts)
@@ -114,6 +132,7 @@ def test_live_decision_equals_oracle_on_hero_and_neighbors(monkeypatch, memory_r
 
 
 @pytest.mark.integration
+@pytest.mark.live
 @live_opt_in
 def test_replay_cache_hit_on_second_live_run(monkeypatch, memory_redis):
     monkeypatch.setenv("LOOPIE_LLM_MODE", "live")

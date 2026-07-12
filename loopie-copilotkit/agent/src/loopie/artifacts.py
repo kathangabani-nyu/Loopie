@@ -70,7 +70,9 @@ def snapshot_redis_artifacts(redis: RedisStore) -> dict[str, Any]:
     return {
         "policy_refund_window": redis.get_memory("policy:refund_window"),
         "routing_rules": redis.get_routing_rules(),
+        "policy_rules": redis.get_policy_rules(),
         "max_transitions": redis.get_config("max_transitions", "6"),
+        "action_taxonomy": redis.get_config("action_taxonomy"),
     }
 
 
@@ -84,7 +86,10 @@ def restore_redis_artifacts(redis: RedisStore, snapshot: dict[str, Any]) -> None
             version=int(mem.get("version", 1)),
         )
     redis.set_routing_rules(list(snapshot.get("routing_rules") or []))
+    redis.set_policy_rules(list(snapshot.get("policy_rules") or []))
     redis.set_config("max_transitions", snapshot.get("max_transitions", "6"))
+    if snapshot.get("action_taxonomy"):
+        redis.set_config("action_taxonomy", snapshot["action_taxonomy"])
 
 
 def apply_seed_artifacts_to_redis(redis: RedisStore) -> dict[str, Any]:
@@ -95,5 +100,10 @@ def apply_seed_artifacts_to_redis(redis: RedisStore) -> dict[str, Any]:
     mem = seed_memory["memory"]
     redis.set_memory(mem["key"], mem["value"], version=mem["version"])
     redis.set_routing_rules(seed_rules.get("rules", []))
+    from src.loopie.policy.seeds import SEED_POLICIES
+    from src.loopie.taxonomy import DEFAULT_ACTIONS
+
+    redis.set_policy_rules([rule.model_dump(mode="json") for rule in SEED_POLICIES])
     redis.set_config("max_transitions", seed_memory.get("max_transitions", 6))
+    redis.set_config("action_taxonomy", json.dumps(list(DEFAULT_ACTIONS)))
     return redis.get_live_artifacts()
