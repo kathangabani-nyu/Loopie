@@ -41,6 +41,7 @@ def _postprocess_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
 
 _weave_initialized = False
 _weave_retry_after = 0.0
+_weave_init_error: str | None = None
 
 try:
     import weave as _weave
@@ -61,7 +62,7 @@ def weave_tracing_enabled() -> bool:
 
 def ensure_weave() -> bool:
     """Initialize Weave once, with a cooldown after an unavailable project."""
-    global _weave_initialized, _weave_retry_after
+    global _weave_initialized, _weave_retry_after, _weave_init_error
     if _weave_initialized:
         return True
     if not weave_tracing_enabled() or time.monotonic() < _weave_retry_after:
@@ -72,13 +73,24 @@ def ensure_weave() -> bool:
         _weave.init(f"{entity}/{project}" if entity else project)
         _weave_initialized = True
         _weave_retry_after = 0.0
+        _weave_init_error = None
         return True
-    except Exception:
+    except Exception as exc:
         _weave_initialized = False
+        _weave_init_error = f"{type(exc).__name__}: {' '.join(str(exc).split())[:500]}"
         # A bad entity/project previously added one network timeout per shadow
         # case. Retry later, not for every decorated operation in the same run.
         _weave_retry_after = time.monotonic() + 60.0
         return False
+
+
+def weave_runtime_status() -> dict[str, Any]:
+    """Return verified initialization state and bounded, non-secret diagnostics."""
+    ready = ensure_weave()
+    return {
+        "ready": ready,
+        "error": None if ready else _weave_init_error,
+    }
 
 
 _UUID_RE = re.compile(

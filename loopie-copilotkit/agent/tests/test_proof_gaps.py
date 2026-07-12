@@ -137,10 +137,14 @@ def test_failed_weave_init_is_not_retried_for_every_operation(monkeypatch):
     monkeypatch.setattr(observability, "_weave_available", True)
     monkeypatch.setattr(observability, "_weave_initialized", False)
     monkeypatch.setattr(observability, "_weave_retry_after", 0.0)
+    monkeypatch.setattr(observability, "_weave_init_error", None)
 
     assert observability.ensure_weave() is False
     assert observability.ensure_weave() is False
     assert calls == ["missing-team/loopie"]
+    status = observability.weave_runtime_status()
+    assert status["ready"] is False
+    assert "project unavailable" in status["error"]
 
 
 def test_live_honesty_gate_fails_when_any_case_used_oracle_fallback():
