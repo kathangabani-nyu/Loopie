@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from enum import Enum
@@ -38,6 +39,23 @@ DECISION_SCHEMA_VERSION = "v2"
 EPISODE_VERSION = "v2"
 MAX_EVIDENCE_ITERATIONS = 4
 MAX_EVIDENCE_CALLS = 4
+
+logger = logging.getLogger(__name__)
+
+
+def _provider_error_summary(exc: Exception) -> str:
+    """Return bounded OpenAI metadata without echoing prompts or credentials."""
+    body = getattr(exc, "body", None)
+    error = body.get("error", body) if isinstance(body, dict) else {}
+    if not isinstance(error, dict):
+        error = {}
+    parts = [type(exc).__name__]
+    for key in ("code", "param", "type", "message"):
+        value = error.get(key)
+        if value is not None:
+            compact = " ".join(str(value).split())[:400]
+            parts.append(f"{key}={compact}")
+    return ":".join(parts)
 EVIDENCE_TOOLS = ("crm_lookup", "risk_score_lookup", "policy_version_read")
 EFFECT_TOOLS = ("refund_tool", "escalate_tool", "crm_lookup")
 
@@ -373,7 +391,9 @@ class LLMGateway:
             except LiveDecisionUnavailable:
                 raise
             except Exception as exc:
-                last_stop_reason = f"{provider_name}_failed:{type(exc).__name__}"
+                error_summary = _provider_error_summary(exc)
+                last_stop_reason = f"{provider_name}_failed:{error_summary}"
+                logger.warning("LLM provider episode failed: provider=%s error=%s", provider_name, error_summary)
                 if self.budget.budget_guard_triggered:
                     raise LiveDecisionUnavailable(
                         f"decision budget exhausted: {self.budget.stop_reason or 'budget_guard'}"
