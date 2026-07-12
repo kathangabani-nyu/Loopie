@@ -5,7 +5,25 @@ from __future__ import annotations
 import pytest
 
 from src.loopie.config import get_settings
-from src.loopie.llm import LLMGateway, LiveDecisionUnavailable
+from src.loopie.llm import LLMGateway, LiveDecisionUnavailable, _provider_error_summary
+
+
+def test_provider_error_summary_exposes_safe_openai_metadata_only():
+    exc = RuntimeError("raw exception must not leak")
+    exc.body = {  # type: ignore[attr-defined]
+        "error": {
+            "message": "Unsupported parameter: temperature",
+            "type": "invalid_request_error",
+            "param": "temperature",
+            "code": "unsupported_parameter",
+        }
+    }
+
+    summary = _provider_error_summary(exc)
+
+    assert "Unsupported parameter: temperature" in summary
+    assert "param=temperature" in summary
+    assert "raw exception must not leak" not in summary
 from src.loopie.providers import cursor_smoke_verified, write_cursor_smoke_marker
 from src.loopie.reliability.budget import BudgetTracker
 
