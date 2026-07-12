@@ -47,7 +47,27 @@
 .lp-form input, .lp-form textarea, .lp-form select { color: var(--lp-text); background: #0c1119; border: 1px solid var(--lp-border); border-radius: 9px; padding: 10px 12px; font: inherit; }
 .lp-form textarea { min-height: 100px; resize: vertical; }
 .lp-button { border: 0; background: var(--lp-blue); color: #06101c; font-weight: 700; border-radius: 9px; padding: 10px 14px; cursor: pointer; width: fit-content; }
+.lp-button:disabled { cursor: not-allowed; opacity: .42; }
+.lp-button-secondary { background: transparent; color: var(--lp-text); border: 1px solid var(--lp-border); }
+.lp-review-list { display: grid; gap: 18px; }
+.lp-review-card { padding: 24px; }
+.lp-review-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
+.lp-review-heading h3 { font-size: 20px; margin: 6px 0; max-width: 760px; }
+.lp-review-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 22px; }
+.lp-review-facts > div, .lp-review-rule { border: 1px solid var(--lp-border); border-radius: 10px; padding: 14px; background: rgba(8,11,16,.45); }
+.lp-review-facts strong { display: block; margin: 7px 0 4px; }
+.lp-review-facts a { display: inline-block; margin-top: 8px; }
+.lp-review-rule { margin-top: 12px; }
+.lp-review-rule p { margin: 8px 0 0; }
+.lp-review-rule code { color: #b9d7ff; }
+.lp-diff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+.lp-diff-grid pre { min-height: 118px; max-height: 320px; overflow: auto; margin: 7px 0 0; padding: 14px; border-radius: 10px; white-space: pre-wrap; }
+.lp-diff-before { background: rgba(255,107,114,.08); border: 1px solid rgba(255,107,114,.24); }
+.lp-diff-after { background: rgba(76,206,138,.08); border: 1px solid rgba(76,206,138,.24); }
+.lp-review-confirm { display: flex; align-items: flex-start; gap: 10px; margin-top: 18px; color: var(--lp-muted); }
+.lp-review-confirm input { margin-top: 3px; }
+.lp-review-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 .lp-empty, .lp-error { color: var(--lp-muted); padding: 24px; }
 .lp-error { color: #ff9da2; }
-@media (max-width: 900px) { .lp-shell { grid-template-columns: 1fr; } .lp-sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--lp-border); padding: 14px; } .lp-brand { margin-bottom: 12px; } .lp-nav { display: flex; overflow-x: auto; } .lp-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 560px) { .lp-main { padding: 24px 14px 56px; } .lp-grid, .lp-form { grid-template-columns: 1fr; } .lp-form .wide { grid-column: auto; } }
+@media (max-width: 900px) { .lp-shell { grid-template-columns: 1fr; } .lp-sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--lp-border); padding: 14px; } .lp-brand { margin-bottom: 12px; } .lp-nav { display: flex; overflow-x: auto; } .lp-grid { grid-template-columns: repeat(2, 1fr); } .lp-review-facts { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .lp-main { padding: 24px 14px 56px; } .lp-grid, .lp-form, .lp-review-facts, .lp-diff-grid { grid-template-columns: 1fr; } .lp-form .wide { grid-column: auto; } .lp-review-heading { display: grid; } }
