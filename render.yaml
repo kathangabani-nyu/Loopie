@@ -2,7 +2,7 @@ services:
   - type: web
     name: loopie-api
     runtime: docker
-    plan: starter
+    plan: free
     dockerfilePath: ./loopie-copilotkit/agent/Dockerfile
     dockerContext: ./loopie-copilotkit/agent
     preDeployCommand: alembic upgrade head
