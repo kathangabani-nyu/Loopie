@@ -61,7 +61,7 @@ Loopie treats agent reliability the way SRE treats infrastructure:
 ```mermaid
 flowchart TB
     subgraph Client["Browser"]
-        UI["Next.js 15 cockpit<br/>tickets · runs · failures · triage<br/>corrections · policies · artifacts"]
+        UI["Next.js 16.2.10 cockpit<br/>tickets · runs · failures · triage<br/>corrections · policies · artifacts"]
         Chat["CopilotKit assistant<br/>(HITL approval interrupts)"]
     end
 
