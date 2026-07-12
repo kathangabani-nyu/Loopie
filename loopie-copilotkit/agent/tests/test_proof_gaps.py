@@ -117,6 +117,32 @@ def test_weave_tracing_requires_explicit_flag(monkeypatch):
     assert weave_tracing_enabled() is False
 
 
+def test_failed_weave_init_is_not_retried_for_every_operation(monkeypatch):
+    monkeypatch.setenv("LOOPIE_WEAVE_ENABLED", "true")
+    monkeypatch.setenv("WANDB_API_KEY", "test-key")
+    monkeypatch.setenv("WANDB_ENTITY", "missing-team")
+    get_settings.cache_clear()
+
+    import src.loopie.observability as observability
+
+    calls = []
+
+    class BrokenWeave:
+        @staticmethod
+        def init(project):
+            calls.append(project)
+            raise RuntimeError("project unavailable")
+
+    monkeypatch.setattr(observability, "_weave", BrokenWeave())
+    monkeypatch.setattr(observability, "_weave_available", True)
+    monkeypatch.setattr(observability, "_weave_initialized", False)
+    monkeypatch.setattr(observability, "_weave_retry_after", 0.0)
+
+    assert observability.ensure_weave() is False
+    assert observability.ensure_weave() is False
+    assert calls == ["missing-team/loopie"]
+
+
 def test_live_honesty_gate_fails_when_any_case_used_oracle_fallback():
     from src.loopie.pipeline import LoopiePipeline
     from src.loopie.reliability.scorers import live_decision_honest

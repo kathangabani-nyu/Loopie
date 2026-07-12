@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 
 import { RecordTable } from "./record-table";
@@ -10,6 +10,11 @@ export function Corrections() {
   const resource = useResource<Record<string, unknown>[]>("corrections", []);
   const [message, setMessage] = useState<string | null>(null);
   const [patchedRun, setPatchedRun] = useState<string | null>(null);
+  useEffect(() => {
+    if (resource.data.length > 0) return;
+    const timer = window.setInterval(() => void resource.refresh(), 3_000);
+    return () => window.clearInterval(timer);
+  }, [resource.data.length, resource.refresh]);
   async function approve(id: string) {
     const response = await fetch(`/api/loopie/v1/corrections/${id}/approve`, {
       method: "POST", headers: { "Content-Type": "application/json" },

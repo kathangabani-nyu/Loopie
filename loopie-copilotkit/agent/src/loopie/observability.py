@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import os
 import re
+import time
 from typing import Any, Callable, TypeVar
 
 from src.loopie.config import get_settings
@@ -39,6 +40,7 @@ def _postprocess_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
     return {k: _sanitize(v) for k, v in inputs.items()}
 
 _weave_initialized = False
+_weave_retry_after = 0.0
 
 try:
     import weave as _weave
@@ -57,16 +59,26 @@ def weave_tracing_enabled() -> bool:
     return _weave_available and bool(os.getenv("WANDB_API_KEY"))
 
 
-def ensure_weave() -> None:
-    """Idempotent weave.init for pipeline and eval paths."""
-    global _weave_initialized
-    if _weave_initialized or not weave_tracing_enabled():
-        return
+def ensure_weave() -> bool:
+    """Initialize Weave once, with a cooldown after an unavailable project."""
+    global _weave_initialized, _weave_retry_after
+    if _weave_initialized:
+        return True
+    if not weave_tracing_enabled() or time.monotonic() < _weave_retry_after:
+        return False
     try:
-        _weave.init(get_settings().weave_project)
+        entity = os.getenv("WANDB_ENTITY", "").strip()
+        project = get_settings().weave_project
+        _weave.init(f"{entity}/{project}" if entity else project)
         _weave_initialized = True
+        _weave_retry_after = 0.0
+        return True
     except Exception:
         _weave_initialized = False
+        # A bad entity/project previously added one network timeout per shadow
+        # case. Retry later, not for every decorated operation in the same run.
+        _weave_retry_after = time.monotonic() + 60.0
+        return False
 
 
 _UUID_RE = re.compile(
@@ -181,7 +193,8 @@ def op(name: str) -> Callable[[F], F]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             nonlocal weave_fn
             if weave_tracing_enabled():
-                ensure_weave()
+                if not ensure_weave():
+                    return fn(*args, **kwargs)
                 if weave_fn is None:
                     weave_fn = _weave.op(name=name, postprocess_inputs=_postprocess_inputs)(fn)
                 return weave_fn(*args, **kwargs)
