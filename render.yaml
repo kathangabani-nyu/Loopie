@@ -5,7 +5,6 @@ services:
     plan: free
     dockerfilePath: ./loopie-copilotkit/agent/Dockerfile
     dockerContext: ./loopie-copilotkit/agent
-    preDeployCommand: alembic upgrade head
     healthCheckPath: /health
     envVars:
       - key: LOOPIE_HOSTED
