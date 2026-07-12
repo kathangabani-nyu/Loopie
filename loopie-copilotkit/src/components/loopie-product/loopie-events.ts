@@ -15,6 +15,7 @@ const EVENT_TYPES = [
   "run.failed",
   "run.retrying",
   "correction.approved",
+  "correction.proposed",
   "correction.rejected",
   "ticket.ingested",
 ] as const;

@@ -25,7 +25,7 @@ export function GoldenDemo() {
   }
 
   async function propose(id: string) {
-    setBusy(true); setMessage(null);
+    setBusy(true); setMessage("Generating and shadow-testing the correction. This can take up to two minutes; keep this page open.");
     const response = await fetch(`/api/loopie/v1/failures/${id}/corrections`, {method: "POST"});
     const payload = await response.json();
     setMessage(response.ok ? `Correction ${payload.id} passed shadow evaluation and is ready for review.` : payload.detail ?? payload.error ?? "Correction generation failed");

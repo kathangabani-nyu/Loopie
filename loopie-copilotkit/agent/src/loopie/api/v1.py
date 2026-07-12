@@ -376,6 +376,10 @@ async def propose_failure_correction(failure_id: str, request: Request) -> Any:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _runtime(request).runs.emit_event(
+        "correction.proposed",
+        {"correction_id": str(prepared["id"]), "failure_id": failure_id},
+    )
     return jsonable_encoder(prepared)
 
 
