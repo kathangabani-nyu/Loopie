@@ -1,288 +1,426 @@
 # Loopie
 
-**Reliability CI for agent swarms**; catch failures, explain them with traces, stage a Redis correction, get human approval, rerun the same eval, and prove recovery with before/after scores.
+**A closed-loop reliability control plane for agent swarms.**
 
-Loopie is a closed-loop control plane for agentic support workflows. It combines a **LangGraph bounded-agent runtime**, **deterministic eval scorers**, **Redis live artifacts**, **Postgres audit history**, **Weights & Biases Weave** for traces and eval compare, **CopilotKit** for human-in-the-loop approval, and **OpenAI** for live resolution and supervisory chat — wired together so every step of the reliability story is inspectable, not hand-wavy.
+Loopie runs support tickets (refunds, billing, security) through a bounded LangGraph agent swarm, grades every run with deterministic scorers, and — when a run fails — traces *why*, proposes a **typed, human-reviewable correction**, shadow-tests it, and proves recovery by rerunning the same ticket against the patched artifact. Every claim of improvement is backed by a before/after eval delta, not a vibe.
 
-URL to view UI (services won't work as I had to revoke API access for cost-cutting purposes): https://loopie-three.vercel.app/
+```text
+baseline fails → trace explains why → candidate artifact differs →
+shadow evaluation passes → human approves → durable artifact commits →
+same ticket reruns → deterministic score improves without regressions
+```
 
----
-
-## Watch Loopie in 21 seconds
-
-<video src="docs/assets/loopie-brag.mp4" controls width="100%"></video>
-
-[Open the MP4 directly](docs/assets/loopie-brag.mp4)
+That invariant is the product. Nothing ships around it.
 
 ---
 
-## The demo in 60 seconds
+## Table of contents
 
-A security-flagged refund ticket (`security_001`) should **escalate**, but the swarm is missing a routing guard in Redis. Loopie runs the story end-to-end:
-
-1. **Baseline fails** — deterministic scorers catch `approve_refund` under an active security flag.
-2. **Weave traces why** — per-node latency, tool surface, and scorer breakdown land in W&B.
-3. **Fix proposed** — classifier maps the failure to a structured Redis routing rule (not a magic patch).
-4. **Human approves** — CopilotKit HITL + cockpit buttons; artifact diff and blast radius are visible first.
-5. **Same eval reruns** — patched artifact version (`v2`) recovers the hero case.
-6. **Counterfactual replay** — neighbor tickets stay green; no regression.
-
-The cockpit shows score deltas, event streams, artifact Time Machine versions, and Weave baseline vs patched eval links — a full proof path for judges and production SREs alike.
+- [Why Loopie](#why-loopie)
+- [System architecture](#system-architecture)
+  - [Component overview](#component-overview)
+  - [The two planes](#the-two-planes)
+  - [Data stores and their contracts](#data-stores-and-their-contracts)
+- [Data flow, end to end](#data-flow-end-to-end)
+  - [1. Ticket ingestion and job queuing](#1-ticket-ingestion-and-job-queuing)
+  - [2. Run execution — the bounded swarm](#2-run-execution--the-bounded-swarm)
+  - [3. Scoring, failure capture, and triage](#3-scoring-failure-capture-and-triage)
+  - [4. Correction lifecycle](#4-correction-lifecycle)
+  - [5. Live updates to the UI](#5-live-updates-to-the-ui)
+- [Reliability guarantees](#reliability-guarantees)
+- [Observability with W&B Weave](#observability-with-wb-weave)
+- [API surface](#api-surface)
+- [Repository layout](#repository-layout)
+- [Getting started](#getting-started)
+- [Configuration reference](#configuration-reference)
+- [Verification](#verification)
+- [License](#license)
 
 ---
 
-## Architecture
+## Why Loopie
+
+Agent swarms fail in production, and most teams discover it from angry users rather than from their own tooling. When they do find a failure, the "fix" is usually a prompt tweak with no evidence it worked and no proof it didn't break something else.
+
+Loopie treats agent reliability the way SRE treats infrastructure:
+
+| Problem | Loopie's answer |
+|---|---|
+| Failures are invisible | Every run is scored by deterministic policy + structural scorers; failures become first-class records |
+| Root cause is guesswork | Full per-node traces (timings, tool calls, artifact read-sets) land in W&B Weave |
+| Fixes are untyped prompt edits | Corrections are a **typed union** (routing rule, memory update, policy guard) with a mutable-key allowlist |
+| Fixes ship unreviewed | Every correction passes shadow evaluation and **mandatory human approval** before commit |
+| "It's fixed" is unverifiable | Approval automatically queues a patched rerun; the improvement claim requires a fail→pass delta with no regressions |
+
+---
+
+## System architecture
+
+### Component overview
 
 ```mermaid
 flowchart TB
-  subgraph Browser
-    UI[Next.js Cockpit]
-    Chat[CopilotKit Side Chat]
-  end
+    subgraph Client["Browser"]
+        UI["Next.js 15 cockpit<br/>tickets · runs · failures · triage<br/>corrections · policies · artifacts"]
+        Chat["CopilotKit assistant<br/>(HITL approval interrupts)"]
+    end
 
-  subgraph Vercel
-    Proxy["/api/loopie/* proxy"]
-    CK[CopilotKit Runtime]
-  end
+    subgraph Front["Next.js server (Vercel / local)"]
+        Auth["Auth.js session guard<br/>(proxy middleware)"]
+        Proxy["/api/loopie/v1/[...path]<br/>authenticated REST proxy"]
+        CKR["/api/copilotkit<br/>AG-UI bridge"]
+    end
 
-  subgraph Render
-    API[loopie-api FastAPI]
-    Agent[loopie-agent LangGraph]
-  end
+    subgraph Backend["loopie_server.py — FastAPI (single deployment)"]
+        REST["REST /api/v1<br/>tickets · runs · failures · corrections<br/>triage · policies · artifacts"]
+        AGUI["Native AG-UI control agent<br/>(LangGraph loopie_control)"]
+        Worker["DurableWorker<br/>Postgres lease queue consumer"]
+        SSE["/api/v1/events<br/>Redis Stream → SSE"]
+        Swarm["Bounded agent swarm<br/>(LangGraph StateGraph)"]
+        Rel["Reliability engine<br/>scorers · classifier · corrections<br/>shadow eval · replay · advisory judge"]
+    end
 
-  subgraph Data
-    Redis[(Redis Cloud free tier<br/>artifacts + streams)]
-    PG[(Neon Postgres<br/>ledger + Time Machine)]
-    W&B[(W&B Weave<br/>traces + evals)]
-  end
+    subgraph Stores["Data layer"]
+        PG[("Postgres — system of record<br/>tickets · runs · manifests · read sets<br/>jobs · failures · corrections · approvals<br/>artifact versions · outbox · audit · cost ledger")]
+        Redis[("Redis — rebuildable projection<br/>artifact docs · bounded event streams<br/>LLM cache")]
+        Weave[("W&B Weave<br/>traces · eval compare<br/>never the only evidence store")]
+    end
 
-  subgraph Swarm["LangGraph bounded-agent runtime"]
-    T[Triage] --> C[Pinned Context]
-    C --> R[Resolver Agent]
-    R <--> ET[Read-only Evidence Tools]
-    R --> X[Policy Authorization + Execution]
-    X --> E[Deterministic Evaluator]
-  end
+    OpenAI["OpenAI<br/>(live mode + advisory judge + chat)"]
 
-  UI --> Proxy --> API
-  Chat --> CK --> Agent
-  Agent -->|HTTP tools| API
-  API --> Swarm
-  API --> Redis
-  API --> PG
-  API --> W&B
-  Swarm --> Redis
+    UI --> Auth --> Proxy -->|"Bearer service token"| REST
+    Chat --> CKR --> AGUI
+    AGUI -.->|"same services as REST"| REST
+    REST -->|enqueue jobs| PG
+    Worker -->|"claim / heartbeat / complete"| PG
+    Worker --> Swarm --> Rel
+    Rel --> PG
+    Rel -->|"outbox projection"| Redis
+    SSE --> Redis
+    UI <-->|EventSource| SSE
+    Swarm --> Weave
+    Rel --> Weave
+    Swarm -.->|live mode only| OpenAI
+    Rel -.->|advisory judge| OpenAI
 ```
 
-| Layer | Technology | Role |
-|-------|------------|------|
-| **UI** | Next.js 15, Framer Motion | Reliability cockpit — phase rail, trace viz, scorecard, artifact diff |
-| **Agent UX** | CopilotKit | Live chat, frontend tools, human-in-the-loop approval interrupts |
-| **Supervisor** | LangGraph (`loopie_control`) | Metered OpenAI chat that calls the same REST proof API as the buttons |
-| **Worker runtime** | LangGraph StateGraph | Deterministic control plane around one bounded evidence-gathering resolver agent |
-| **Proof API** | FastAPI (`loopie-api`) | Baseline, propose, approve, patched rerun, counterfactual — authoritative state |
-| **Live memory** | Redis Cloud free tier | Routing rules, policy versions, eval event streams (`XADD` / `XREAD`) |
-| **Audit trail** | Neon Postgres | Artifact versioning, correction ledger, cost tracking, Time Machine |
-| **Observability** | W&B Weave | `@weave.op` on every swarm node; `weave.Evaluation` suites for baseline vs patched |
-| **LLM** | OpenAI (`gpt-5.5`) | Live chat + optional agentic diagnosis; proof path uses deterministic **test** mode |
+Key structural decisions:
+
+- **One backend deployment.** `agent/loopie_server.py` is the single composition root: REST API, AG-UI control agent, durable worker, and SSE all live in one FastAPI process. There is no second `langgraph dev` service to drift out of sync.
+- **The UI never talks to the backend directly.** Every browser request passes through the Auth.js-guarded Next.js proxy, which attaches the service bearer token. The backend rejects unauthenticated requests with constant-time token comparison.
+- **The chat is additive, never authoritative.** CopilotKit tools call the same service layer as the REST endpoints and the cockpit buttons — one source of truth for every action.
+
+### The two planes
+
+Loopie is one product with two deliberately separated planes:
+
+1. **Execution plane** — the support-ticket swarm. A fixed LangGraph DAG (`triage → context → resolution → execution → evaluator`) that resolves each ticket under strict budgets. It is a *bounded* agent: the control flow is deterministic; only the resolution episode involves model choice, and even that is replaced by a deterministic oracle in test mode.
+2. **Reliability plane** — the control loop around the swarm. Scoring, failure classification, correction proposal, shadow evaluation, human approval, artifact versioning, patched reruns, and counterfactual replay.
+
+The planes share data stores but not authority: the reliability plane can change what future runs read (artifacts), never what a run in flight already read.
+
+### Data stores and their contracts
+
+| Store | Role | Contract |
+|---|---|---|
+| **Postgres** (`loopie` schema) | System of record | Everything durable lives here: `tickets`, `runs`, `run_manifests`, `run_read_sets`, `jobs`, `failures`, `triage_items`, `corrections`, `approvals`, `approval_events`, `artifact_versions`, `artifact_outbox`, `audit_events`, `cost_ledger`, `eval_runs`, `eval_case_results`, `policy_rules`, `golden_annotations`, `projects` |
+| **Redis** | Rebuildable projection | Artifact documents (`loopie:{project}:artifact:doc:*`), bounded event streams (`loopie:{project}:events:*` via `XADD`/`XREAD`), and an LLM response cache. If Redis is wiped, it is rebuilt from Postgres — never the other way around |
+| **W&B Weave** | Observability | Every swarm node, scorer, and diagnosis op is a `@weave.op`; eval suites compare baseline vs patched artifact states. Weave is evidence *presentation*; authoritative evidence always also lands in Postgres |
+
+Two invariants keep this honest:
+
+- **Redis is updated only after a durable Postgres commit**, via the `artifact_outbox` (transactional-outbox pattern). No dual writes.
+- **Graph nodes never read mutable Redis mid-run.** Redis is sampled exactly once at run start into an immutable manifest (below).
 
 ---
 
-## Multi-agent orchestration
+## Data flow, end to end
 
-Loopie uses **two LangGraph graphs** on purpose:
+### 1. Ticket ingestion and job queuing
 
-### Bounded-agent runtime (ticket execution)
+```mermaid
+sequenceDiagram
+    participant U as Browser
+    participant P as Next.js proxy (Auth.js)
+    participant A as FastAPI /api/v1
+    participant PG as Postgres
 
-Each eval case runs through a fixed control-plane DAG with real timings and receipts:
-
+    U->>P: POST /api/loopie/v1/tickets (session cookie)
+    P->>A: POST /api/v1/tickets (Bearer service token)
+    A->>A: Validate — reject golden labels in production payloads
+    A->>PG: INSERT ticket
+    U->>P: POST /tickets/{id}/runs
+    P->>A: queue run (Idempotency-Key honored)
+    A->>PG: INSERT job (durable lease queue) — 202 Accepted
 ```
-triage → context → resolution agent → authorization/execution → evaluator
+
+Tickets arrive one at a time or as bulk imports (JSONL/JSON documents). Ticket bodies are **untrusted input**: they are never allowed to carry golden labels into production paths, and they are prompt-injection-hardened when passed to any LLM.
+
+Runs are asynchronous by design. Queuing a run inserts a row into the Postgres-backed `jobs` table and returns `202`. The **DurableWorker** claims jobs with a lease (`claim → heartbeat → complete`), so a crashed worker's jobs are re-leased rather than lost, and horizontal workers never double-execute.
+
+### 2. Run execution — the bounded swarm
+
+```mermaid
+flowchart LR
+    M["Manifest build<br/>(Redis sampled ONCE,<br/>content-hashed read set<br/>persisted to Postgres)"] --> T
+
+    subgraph DAG["LangGraph StateGraph — every node is a @weave.op"]
+        T["triage<br/>classify ticket +<br/>security context"] --> C["context<br/>pin manifest artifacts:<br/>routing rules · memory ·<br/>compiled policy"]
+        C --> R["resolution<br/>evidence tools → proposed<br/>action + effects<br/>(oracle in test mode,<br/>bounded LLM in live mode)"]
+        R --> X["execution<br/>deterministic Policy-DSL<br/>authorization, then<br/>simulated effects"]
+        X --> E["evaluator<br/>deterministic scorers<br/>→ pass/fail"]
+    end
+
+    E --> Out["Run record + trace + scores<br/>→ Postgres · Weave · Redis events"]
 ```
 
-- **Triage** classifies the ticket and security context.
-- **Context** pins Redis memory, routing rules, and policy rules into the run manifest.
-- **Resolution** selects evidence tools, observes results, and proposes an action plus effects (oracle episode in test mode, bounded LLM episode in live mode).
-- **Execution** deterministically authorizes the proposal against the Policy DSL before simulating effects.
-- **Evaluator** grades deterministic scorers (`action_match`, `unauthorized_tool_call`, etc.).
+The critical step happens **before** the DAG: the run service builds an **immutable manifest**. Redis artifacts (routing rules, policy memory, compiled policies) are read exactly once, content-hashed (canonical-JSON SHA-256), and recorded as an authoritative **read set** in Postgres. Every node receives only these materialized values, which means:
 
-Every node is wrapped with **Weave `@weave.op`** so latency, inputs (redacted), and outputs appear in the traces dashboard.
+- A concurrent artifact mutation cannot change an in-flight decision.
+- Any run is exactly replayable: same manifest → same deterministic path.
+- A correction's blast radius is computable — you know precisely which runs read which artifact version.
 
-### Control agent (CopilotKit sidecar)
+Budgets are enforced structurally (max tool calls, max transitions), not by hoping the model behaves. In **test mode** (`LOOPIE_LLM_MODE=test`) the resolution episode is a deterministic oracle — the entire proof path runs at $0. In **live mode**, real OpenAI calls are made, metered into the cost ledger, and **failures surface as failures** — the system never silently falls back to the oracle to fake a success.
 
-The **`loopie_control`** graph exposes the same pipeline as chat tools (`runBaseline`, `proposeCorrection`, `approveCorrection`, …) and streams partial state back to the UI. Chat spend is capped via **`LOOPIE_MAX_CHAT_COST_USD`** and recorded in the Postgres ledger — separate from the zero-cost deterministic proof path.
+### 3. Scoring, failure capture, and triage
+
+Pass/fail is decided by **deterministic scorers only** — no LLM in the authoritative path:
+
+| Scorer | Checks |
+|---|---|
+| `action_match` | Final action matches expected/policy-derived action |
+| `required_policy_checked` | Mandatory policy rules were consulted |
+| `unauthorized_tool_call` | No tool outside the authorized surface was invoked |
+| `loop_count_under_limit` | Transition budget respected |
+| `tool_calls_under_budget` | Tool-call budget respected |
+| `memory_version_correct` | Run read the expected artifact versions |
+| `action_in_taxonomy` | Action belongs to the known action taxonomy |
+| `production_decision_completed` | Live decisions completed honestly (no oracle fallback) |
+
+An **advisory LLM judge** may add a semantic opinion, but it *never* flips authoritative pass/fail. When the judge and deterministic layer disagree, a **triage item** is created for a human to resolve — disagreements are data, not overrides. Judge calibration is tracked against resolved triage decisions.
+
+A failed run produces a `failures` row with the classified failure category (`stale_memory`, `missing_guard`, `loop_detected`, …) and links to the run, manifest, and trace evidence.
+
+### 4. Correction lifecycle
+
+This is the heart of Loopie — every arrow below is auditable:
+
+```mermaid
+sequenceDiagram
+    participant H as Human (UI / HITL chat / REST)
+    participant CS as CorrectionService
+    participant SH as Shadow evaluator
+    participant AS as ApprovalService (single path)
+    participant PG as Postgres
+    participant OB as Outbox projector
+    participant R as Redis
+    participant W as Worker (patched rerun)
+
+    Note over CS: Failure classified → typed proposal
+    CS->>CS: Map failure category → typed correction<br/>(routing rule / memory update / policy guard)
+    CS->>CS: Validate: typed union · mutable-key allowlist ·<br/>Policy-DSL compilation where applicable
+    CS->>SH: Shadow evaluation — rerun failing case against<br/>candidate manifest (no state mutation)
+    SH-->>CS: shadow pass required to proceed
+    CS->>PG: INSERT correction (pending, with candidate diff)
+
+    H->>AS: approve(correction_id, actor, channel)
+    AS->>PG: TRANSACTION: commit correction ·<br/>CAS artifact version bump (v1→v2) ·<br/>approval + audit events · outbox row
+    AS->>OB: project_pending_outbox()
+    OB->>R: write committed artifact doc<br/>(only AFTER durable commit)
+    AS->>PG: queue patched rerun of the SAME ticket
+    W->>W: rerun with new manifest (reads v2)
+    W->>PG: patched run: fail → pass delta recorded
+    Note over W: Counterfactual replay — neighbor tickets<br/>rerun to prove no regression
+```
+
+Guard rails that cannot be bypassed:
+
+- **Typed corrections only.** A correction is a structured object from a closed union — never a free-form patch. Model-generated proposals must survive schema validation, the mutable-key allowlist, and (for policy changes) Policy-DSL compilation.
+- **Shadow evaluation before review.** The candidate artifact is spliced into a copy of the failing run's manifest and re-evaluated. If the shadow run doesn't pass, the correction never reaches a human.
+- **One approval path.** UI button, CopilotKit HITL interrupt, and REST all converge on the same `ApprovalService`. Approval, compare-and-swap artifact commit, audit event, and outbox insertion happen in one place.
+- **CAS versioning.** Artifact commits are compare-and-swap against the expected prior version, so two racing approvals cannot silently clobber each other. Version history (`artifact_versions`) powers the Time Machine view.
+- **Proof, not promises.** Approving automatically queues a patched rerun of the originating ticket. An improvement claim requires the linked rerun to show a deterministic fail→pass delta — and counterfactual replay confirms neighboring tickets stayed green.
+
+### 5. Live updates to the UI
+
+Every state change (run started, scored, failure created, correction proposed/approved, artifact committed) is appended to a **bounded Redis Stream**. The FastAPI `/api/v1/events` endpoint tails that stream and re-emits it as **Server-Sent Events**, with `Last-Event-ID` resume support. The Next.js cockpit subscribes via `EventSource` (through the authenticated proxy), so the tickets, runs, failures, triage, corrections, policies, and artifacts pages update in real time without polling.
+
+Because the stream is a bounded projection — not the record — losing it costs nothing: the UI re-hydrates from the REST API, which reads Postgres.
 
 ---
 
-## Weave & W&B — used to full extent
+## Reliability guarantees
 
-Weave is not bolted on as logging. It is the **eval compare layer**:
+A summary of the invariants the codebase enforces (see [`loopie-copilotkit/CLAUDE.md`](loopie-copilotkit/CLAUDE.md) for the development contract):
 
-| Capability | How Loopie uses it |
-|------------|-------------------|
-| **Live traces** | Every swarm node, scorer, and diagnosis op is a Weave op with DSN redaction |
-| **Eval suites** | `weave.Evaluation` runs the ticket batch twice — artifact `v1` (baseline) vs `v2` (patched) |
-| **Custom scorers** | Each deterministic scorer is a `weave.op` scorer in the evaluation |
-| **Proof columns** | Before/after artifact hashes and correction id attached as eval attributes |
-| **Dashboard links** | Cockpit surfaces live traces + baseline/patched eval deep links |
-
-Set `LOOPIE_WEAVE_ENABLED=true`, `WANDB_API_KEY`, and `WANDB_ENTITY` on **loopie-api**. Weave runs independently of `LOOPIE_LLM_MODE=test` — you get full observability without burning tokens on the proof path.
-
----
-
-## Redis & Postgres — live artifacts + Time Machine
-
-**Redis** holds the runtime the swarm actually reads:
-
-- `routing:rules` — JSON guard list (the demo fix adds `security_flag_blocks_refund`)
-- Policy memory keys with version stamps
-- `evals` stream — append-only audit events the cockpit renders live
-
-**Postgres** is the durable ledger:
-
-- Versioned artifact history (Time Machine UI: v1 → v2)
-- Correction approvals with before/after hashes
-- Cost ledger for chat vs pipeline
-
-Hosted mode (`LOOPIE_HOSTED=1`) requires both — no silent in-memory fallback.
+1. **Postgres is the system of record; Redis is a rebuildable projection.** Never the reverse.
+2. **Immutable manifests + authoritative read sets.** No graph node reads mutable Redis mid-run.
+3. **Deterministic authoritative scoring.** Golden annotations are test/eval-only; the LLM judge is advisory.
+4. **Live LLM failures surface as failures.** No silent oracle fallback in production paths.
+5. **Corrections pass typed validation → allowlist → shadow eval → human review.** In that order, no skips.
+6. **Single approval service** owns approval, CAS commit, audit, and outbox insertion atomically.
+7. **Improvement claims require linked rerun evidence** — fail→pass delta plus no-regression replay.
+8. **Ticket bodies stay untrusted** in every prompt; secrets are never committed or printed.
 
 ---
 
-## CopilotKit & human-in-the-loop
+## Observability with W&B Weave
 
-Loopie uses CopilotKit for three things that matter in a reliability product:
+Weave is wired in as the eval-compare layer, not bolted-on logging:
 
-1. **Frontend tools** — chat can drive the same actions as cockpit buttons (single source of truth via REST).
-2. **`useHumanInTheLoop`** — approval interrupt shows artifact diff before apply.
-3. **State streaming** — agent state merges with REST export; cockpit buttons stay authoritative for the proof path.
+- **Traces** — every swarm node, scorer, and diagnosis op is a `@weave.op` with DSN/secret redaction; per-node latency and tool surfaces are inspectable per run.
+- **Eval suites** — `weave.Evaluation` runs the ticket batch against artifact `v1` (baseline) and `v2` (patched) with identical scorers, producing a side-by-side comparison.
+- **Proof columns** — before/after artifact content hashes and the correction id are attached as eval attributes, tying the dashboard back to the Postgres audit trail.
+- **Deep links** — the cockpit surfaces live trace and baseline-vs-patched eval links.
 
-The side chat is additive. Judges can run the entire demo from buttons alone with **`LOOPIE_LLM_MODE=test · $0`**.
+Weave runs independently of the LLM mode: with `LOOPIE_LLM_MODE=test` you get full observability at zero token cost. Weave is intentionally **never the only evidence store** — the run record in Postgres remains authoritative.
 
 ---
 
-## Quick start (local)
+## API surface
+
+All routes live under `/api/v1` on the FastAPI service (proxied from the UI as `/api/loopie/v1/*`):
+
+| Area | Endpoints | Notes |
+|---|---|---|
+| Health | `GET /healthz`, `GET /preflight` | Redis/Postgres/Weave/worker readiness report |
+| Meta | `GET /meta` | Mode, project, taxonomy info |
+| Tickets | `POST /tickets`, `POST /tickets/import`, `GET /tickets`, `GET /tickets/{id}` | Import accepts JSONL/JSON; golden labels rejected |
+| Runs | `POST /tickets/{id}/runs` (202, idempotent), `GET /runs`, `GET /runs/{id}` | Async via durable job queue |
+| Failures | `GET /failures`, `GET /failures/{id}` | Classified failure records |
+| Corrections | `POST /failures/{id}/corrections`, `GET /corrections`, `POST /corrections/{id}/approve`, `POST /corrections/{id}/reject` | Approve/reject route through the single ApprovalService |
+| Triage | `GET /triage`, `POST /triage/{id}/resolve`, `GET /judge/calibration` | Judge/deterministic disagreements |
+| Policies | `GET /policies`, `POST /policies/compile` | Policy-DSL compilation |
+| Artifacts | `GET /artifacts` | Versioned artifact state (Time Machine) |
+| Events | `GET /events` | SSE stream with `Last-Event-ID` resume |
+| Demo | `POST /demo/start` | Scripted golden-path walkthrough |
+
+Authentication: every non-health request requires `Authorization: Bearer <LOOPIE_API_TOKEN>`; the browser never holds this token — only the Auth.js-guarded Next.js proxy does.
+
+---
+
+## Repository layout
+
+```text
+Loopie/
+├── README.md                        ← you are here
+├── render.yaml                      ← Render deployment blueprint
+├── loopie-copilotkit/               ← main implementation
+│   ├── CLAUDE.md                    ← development contract (invariants)
+│   ├── src/                         ← Next.js 15 app
+│   │   ├── auth.ts / proxy.ts       ← Auth.js session + route guard
+│   │   ├── app/
+│   │   │   ├── api/loopie/v1/[...path]/   ← authenticated REST proxy
+│   │   │   ├── api/copilotkit/            ← AG-UI bridge to control agent
+│   │   │   └── tickets|runs|failures|triage|corrections|policies|artifacts/
+│   │   └── components/loopie-product/     ← cockpit pages, SSE hooks, assistant
+│   ├── agent/                       ← Python backend (uv-managed)
+│   │   ├── loopie_server.py         ← FastAPI composition root (the ONLY deployment)
+│   │   ├── migrations/              ← Alembic schema (loopie.* tables)
+│   │   ├── src/loopie/
+│   │   │   ├── swarm.py             ← bounded LangGraph DAG
+│   │   │   ├── manifests.py         ← immutable manifests + read-set hashing
+│   │   │   ├── worker.py / jobs.py  ← durable Postgres lease queue
+│   │   │   ├── control_agent.py     ← AG-UI control agent (CopilotKit)
+│   │   │   ├── api/v1.py            ← REST surface
+│   │   │   ├── services/            ← runs · corrections · approvals (single path)
+│   │   │   ├── reliability/         ← scorers · classifier · correction_gen ·
+│   │   │   │                          shadow eval · replay · advisory judge · oracle
+│   │   │   ├── policy/              ← Policy DSL + compiler + seeds
+│   │   │   ├── stores/              ← Postgres ledger · Redis store · LLM cache
+│   │   │   └── observability.py     ← Weave init + redaction
+│   │   └── tests/                   ← unit, integration, live-marked suites
+│   └── docker/ · docker-compose*.yml← local infra + recovery test harness
+└── loopie/docs/                     ← product design docs and runbooks
+```
+
+---
+
+## Getting started
 
 ### Prerequisites
 
 - Node.js 18+
-- Python 3.12+ and [uv](https://docs.astral.sh/uv/)
-- Redis (local or the current Redis Cloud free-tier endpoint)
-- Postgres (local or Neon) for hosted parity
-- Optional: `WANDB_API_KEY` + `WANDB_ENTITY` for Weave
+- Python 3.12+ with [uv](https://docs.astral.sh/uv/)
+- Docker (for local Postgres + Redis)
+- Optional: `WANDB_API_KEY` for Weave, `OPENAI_API_KEY` for live mode/chat
 
-### 1. Clone and configure
+### Local development
 
 ```bash
 git clone https://github.com/kathangabani-nyu/Loopie.git
 cd Loopie/loopie-copilotkit
-cp .env.example .env
+
+# 1. Configure — never commit the result
+cp .env.example .env.local
+#    set: owner password, Auth.js secret, LOOPIE_API_TOKEN,
+#         POSTGRES_URL, REDIS_URL
+
+# 2. Infrastructure
+npm run dev:infra          # local Postgres + Redis
+
+# 3. Migrations
+cd agent && uv run alembic upgrade head && cd ..
+
+# 4. Run everything (UI :3000, API :8001)
+npm run dev                # or: npm run dev:stack (infra + apps)
 ```
 
-Edit `.env` — at minimum:
+Sign in at `http://localhost:3000`, create or import tickets, queue runs, and walk the failure → correction → approval → rerun loop from the cockpit or the CopilotKit assistant.
 
-```bash
-REDIS_URL=redis://localhost:6379
-POSTGRES_URL=postgresql://...
-LOOPIE_LLM_MODE=test
-LOOPIE_WEAVE_ENABLED=true
-WANDB_API_KEY=...
-WANDB_ENTITY=your-entity
-WEAVE_PROJECT=loopie
-OPENAI_API_KEY=...          # for live chat only
-```
+### Hosted deployment
 
-### 2. Run the stack
+| Service | Platform |
+|---|---|
+| Next.js UI + proxy | Vercel |
+| FastAPI (`loopie_server.py`) | Render (see [`render.yaml`](render.yaml)) |
+| Postgres | Neon |
+| Redis | Redis Cloud |
+| Weave | W&B Cloud |
 
-```bash
-npm install
-npm run dev
-```
-
-This starts:
-
-- **Next.js UI** — http://localhost:3000
-- **loopie-api** — http://localhost:8001 (proof backend)
-- **loopie-agent** — http://localhost:8123 (CopilotKit LangGraph)
-
-### 3. Run the demo
-
-Click through the cockpit command bar (or press `1`–`5`):
-
-`Run Baseline` → `Propose` → `Approve` → `Rerun + Compare` → `Counterfactual Replay`
-
-Or toggle **Autopilot** with Space for a hands-free walkthrough.
+Hosted mode (`LOOPIE_HOSTED=1`) hard-requires Postgres, Redis, and the service token — there is no silent in-memory fallback.
 
 ---
 
-## Hosted deployment
+## Configuration reference
 
-Production layout (see [`render.yaml`](render.yaml)):
-
-| Service | Platform | Purpose |
-|---------|----------|---------|
-| Next.js UI | Vercel | Cockpit + `/api/loopie/*` proxy |
-| `loopie-api` | Render | FastAPI proof backend |
-| `loopie-agent` | Render | LangGraph + CopilotKit |
-| Redis | Redis Cloud free tier | Live artifacts + streams; current endpoint uses explicit non-TLS opt-out |
-| Postgres | Neon | Ledger + Time Machine |
-| Weave | W&B Cloud | Traces + eval compare |
-
-Detailed env matrix: [`loopie/docs/hosted-demo-runbook.md`](loopie/docs/hosted-demo-runbook.md)
-
----
-
-## Project structure
-
-```
-Loopie/
-├── README.md                 ← you are here
-├── render.yaml               ← Render Blueprint (api + agent)
-├── loopie-copilotkit/        ← main implementation
-│   ├── src/                  ← Next.js cockpit + CopilotKit
-│   │   ├── app/api/loopie/   ← REST proxy to loopie-api
-│   │   └── components/loopie-cockpit/
-│   └── agent/                ← Python backend
-│       ├── loopie_server.py  ← FastAPI entry
-│       └── src/loopie/
-│           ├── swarm.py      ← LangGraph worker DAG
-│           ├── pipeline.py   ← baseline → fix → rerun orchestration
-│           ├── control_agent.py
-│           ├── reliability/  ← scorers, evals, corrections, replay
-│           └── stores/       ← Redis + Postgres ledger
-└── loopie/docs/              ← runbooks and build plans
-```
-
----
-
-## Environment reference
-
-| Variable | Default (hosted) | Meaning |
-|----------|------------------|---------|
-| `LOOPIE_LLM_MODE` | `test` | Deterministic oracle decisions on proof path |
+| Variable | Default | Purpose |
+|---|---|---|
+| `LOOPIE_LLM_MODE` | `test` | `test` = deterministic oracle (zero-cost proof path) · `live` = real OpenAI resolution |
+| `LOOPIE_REQUIRE_LIVE_LLM_CONFIRMATION` | `true` | Extra confirmation gate before live-mode spend |
+| `LOOPIE_HOSTED` | unset | `1` requires Postgres + Redis + auth; disables all fallbacks |
+| `LOOPIE_API_TOKEN` | — | Service bearer token shared by proxy and API |
+| `POSTGRES_URL` / `REDIS_URL` | — | Data layer connections |
 | `LOOPIE_WEAVE_ENABLED` | `true` | Weave traces + eval suites |
-| `LOOPIE_HOSTED` | `1` | Require Redis + Postgres |
-| `LOOPIE_MAX_EVAL_CASES_PER_DEV_RUN` | `6` | Tickets per Weave eval suite |
-| `LOOPIE_OPENAI_MODEL` | `gpt-5.5` | Live chat model (agent service) |
-| `LOOPIE_MAX_CHAT_COST_USD` | `40` | Chat spend cap |
-
-Legacy `LOOPIE_LLM_MODE=mock` maps to `test`.
+| `WANDB_API_KEY` / `WANDB_ENTITY` / `WEAVE_PROJECT` | — | W&B Weave credentials and project |
+| `OPENAI_API_KEY` | — | Live mode, advisory judge, and chat |
+| `LOOPIE_MAX_CHAT_COST_USD` | budget-capped | Chat spend ceiling, metered in the cost ledger |
 
 ---
 
-## Design principles
+## Verification
 
-```text
-trace → diagnose → persist correction → approve → rerun → compare
+```powershell
+cd loopie-copilotkit/agent
+uv run ruff check src tests migrations loopie_server.py loopie_dev.py loopie_graph.py loopie_control.py
+uv run pytest -m "not integration and not live" -q
+uv run alembic upgrade head --sql
+
+cd ..
+npm run build
+npm audit --omit=dev --audit-level=high
 ```
 
-- **Structured corrections**, not free-form patches — every Redis mutation is typed, diffable, and replayable.
-- **Same eval, two artifact states** — baseline and patched runs share scorers; improvement is measurable.
-- **Human approval is mandatory** — artifact blast radius is shown before apply.
-- **Counterfactual replay** — neighbor cases prove the fix did not regress the fleet.
-- **Test mode for judging, Weave for proof, OpenAI for chat** — each tool used where it shines.
+Real recovery tests (crash the worker mid-run, prove lease takeover and replay) run in containers:
+
+```bash
+docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from tests
+```
+
+Live smoke tests are opt-in and budget-capped; see `.github/workflows/nightly-reliability.yml`.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE) if present in your fork.
+MIT — see [LICENSE](loopie-copilotkit/LICENSE).
