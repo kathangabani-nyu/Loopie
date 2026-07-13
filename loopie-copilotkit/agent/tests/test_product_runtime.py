@@ -246,3 +246,87 @@ def test_jsonl_and_csv_document_imports_queue_every_ticket() -> None:
         )
         assert csv_result.status_code == 202
         assert csv_result.json()["accepted"] == 1
+
+
+def test_golden_demo_queues_only_a_live_baseline(monkeypatch) -> None:
+    from src.loopie.api import v1
+
+    class FakeRepository:
+        async def list_runs(self, *, limit: int):
+            return []
+
+        async def list_tickets(self, *, limit: int):
+            return [{"id": "ticket-1", "external_id": "security_001"}]
+
+    class FakeRuns:
+        queued: dict | None = None
+
+        async def queue_ticket_run(self, **kwargs):
+            self.queued = kwargs
+            return {"run": {"id": "run-1", "status": "queued"}}
+
+    class FakeRedis:
+        def flush_loopie_keys(self):
+            return None
+
+    class FakeLedger:
+        def reset(self):
+            return None
+
+    monkeypatch.setattr(
+        v1,
+        "run_preflight",
+        lambda **_: {
+            "weave_dashboard_ready": True,
+            "llm_mode": "live",
+            "provider_ready": True,
+        },
+    )
+    monkeypatch.setattr(v1, "seed_baseline", lambda **_: {})
+    runs = FakeRuns()
+    app = FastAPI()
+    app.include_router(router)
+    app.state.runtime = SimpleNamespace(
+        repository=FakeRepository(),
+        runs=runs,
+        stores=SimpleNamespace(redis=FakeRedis(), ledger=FakeLedger()),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/demo/start", json={"confirm": "RESET_DEMO"})
+
+    assert response.status_code == 202
+    assert response.json()["mode"] == "live"
+    assert runs.queued == {
+        "ticket_id": "ticket-1",
+        "mode": "live",
+        "kind": "golden",
+        "idempotency_key": "demo:security_001:live:baseline",
+    }
+
+
+def test_golden_demo_rejects_oracle_mode(monkeypatch) -> None:
+    from src.loopie.api import v1
+
+    monkeypatch.setattr(
+        v1,
+        "run_preflight",
+        lambda **_: {
+            "weave_dashboard_ready": True,
+            "llm_mode": "test",
+            "provider_ready": True,
+        },
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.state.runtime = SimpleNamespace(
+        repository=SimpleNamespace(),
+        runs=SimpleNamespace(),
+        stores=SimpleNamespace(redis=object(), ledger=object()),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/demo/start", json={"confirm": "RESET_DEMO"})
+
+    assert response.status_code == 503
+    assert "requires live model execution" in response.json()["detail"]

@@ -82,6 +82,10 @@ def test_approval_service_applies_projects_and_queues_linked_patched_run() -> No
             prepared["id"], actor="owner", channel="hitl_chat", note="approved in test"
         )
 
+        assert result["approval_decision"] == "approved"
+        assert result["approval_channel"] == "hitl_chat"
+        assert result["before_hash"] == prepared["before_hash"]
+        assert result["after_hash"] == prepared["after_hash"]
         assert result["patched_run"]["parent_run_id"] == baseline["run"]["id"]
         patched = await repository.get_run(result["patched_run"]["run_id"])
         assert patched["kind"] == "patched"

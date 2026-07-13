@@ -251,7 +251,12 @@ def shadow_evaluate_correction(
     must flip fail -> pass, and no ticket that already passed at baseline may
     flip to failing under the candidate artifacts.
     """
-    artifact_key, _, _, candidate = _candidate(correction, ledger)
+    artifact_key, _, before, candidate = _candidate(correction, ledger)
+    artifact_proof = build_artifact_proof(
+        correction_id=correction["id"],
+        before_value=before,
+        after_value=candidate,
+    )
     hero_case_id = correction["case_id"]
     hero = tickets[hero_case_id]
     case_ids = [hero_case_id, *hero.get("neighbors", [])]
@@ -275,6 +280,8 @@ def shadow_evaluate_correction(
             ledger=ledger,
             mode=mode,
             artifact_version=f"{baseline_manifest.content_hash[:12]}:baseline",
+            phase="shadow_baseline",
+            correction_id=correction["id"],
             manifest=baseline_manifest,
         )
         baseline_passed = bool(score_layers(baseline_run, ticket)["passed"])
@@ -293,6 +300,8 @@ def shadow_evaluate_correction(
                 ledger=ledger,
                 mode=mode,
                 artifact_version=f"{shadow_manifest.content_hash[:12]}:{sample}",
+                phase="shadow_candidate",
+                correction_id=correction["id"],
                 manifest=shadow_manifest,
             )
             correctness = score_layers(run, ticket)
@@ -313,6 +322,7 @@ def shadow_evaluate_correction(
     return {
         "id": f"shadow_{uuid.uuid4().hex[:12]}",
         "artifact_key": artifact_key,
+        **artifact_proof,
         "cases": results,
         "hero_improved": hero_improved,
         "no_regressions": no_regressions,

@@ -62,7 +62,14 @@ def run_preflight(
     )
     weave_project_url = _weave_traces_url() if weave_status["ready"] else None
     provider_mode = _provider_mode()
-    provider_ready = settings.is_test or provider_mode != "live:unconfigured"
+    live_confirmation_ready = (
+        settings.is_test
+        or not settings.require_live_confirmation
+        or os.getenv("LOOPIE_LIVE_CONFIRMED") == "1"
+    )
+    provider_ready = (
+        settings.is_test or provider_mode != "live:unconfigured"
+    ) and live_confirmation_ready
     service_auth_ready = bool(settings.api_token)
 
     hosted_requirements_met = (
@@ -91,6 +98,7 @@ def run_preflight(
         "weave_init_error": weave_status["error"],
         "provider_mode": provider_mode,
         "provider_ready": provider_ready,
+        "live_confirmation_ready": live_confirmation_ready,
         "service_auth_ready": service_auth_ready,
         "llm_mode": settings.llm_mode,
         "full_agentic": settings.full_agentic,

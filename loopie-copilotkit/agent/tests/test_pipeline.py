@@ -74,6 +74,36 @@ def test_hosted_ordinary_runs_do_not_require_weave_configuration(monkeypatch):
     assert report["weave_dashboard_ready"] is False
 
 
+def test_live_preflight_requires_explicit_confirmation(monkeypatch):
+    from types import SimpleNamespace
+
+    from src.loopie import preflight
+
+    from memory_stores import MemoryLedger, MemoryRedis
+
+    monkeypatch.setenv("LOOPIE_LLM_MODE", "live")
+    monkeypatch.delenv("LOOPIE_LIVE_CONFIRMED", raising=False)
+    monkeypatch.setattr(
+        preflight,
+        "provider_registry",
+        lambda: {
+            "openai": SimpleNamespace(enabled=True),
+            "cursor": SimpleNamespace(enabled=False),
+        },
+    )
+    get_settings.cache_clear()
+
+    unconfirmed = preflight.run_preflight(redis=MemoryRedis(), ledger=MemoryLedger())
+    assert unconfirmed["live_confirmation_ready"] is False
+    assert unconfirmed["provider_ready"] is False
+
+    monkeypatch.setenv("LOOPIE_LIVE_CONFIRMED", "1")
+    get_settings.cache_clear()
+    confirmed = preflight.run_preflight(redis=MemoryRedis(), ledger=MemoryLedger())
+    assert confirmed["live_confirmation_ready"] is True
+    assert confirmed["provider_ready"] is True
+
+
 def test_test_run_records_oracle_decision(monkeypatch):
     """Test mode always uses oracle — live differential lives in tests/test_live.py."""
     from src.loopie.decide import decide_action

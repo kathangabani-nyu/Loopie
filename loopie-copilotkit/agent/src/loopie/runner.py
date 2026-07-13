@@ -25,9 +25,9 @@ def _run_display_name(call: Any) -> str:
     inputs = getattr(call, "inputs", {}) or {}
     ticket = inputs.get("ticket") or {}
     case_id = str(ticket.get("case_id", "ticket"))
+    phase = str(inputs.get("phase") or "ticket")
     mode = str(inputs.get("mode") or "default")
-    run_id = str(inputs.get("run_id") or "")[:8]
-    return f"{case_id} · {mode} · {run_id}"
+    return f"{case_id} · {phase} · {mode}"
 
 
 def load_tickets(limit: int | None = None) -> list[dict[str, Any]]:
@@ -58,6 +58,9 @@ def _execute_run(
     ledger: Ledger,
     mode: str | None,
     artifact_version: str,
+    phase: str = "ticket",
+    correction_id: str | None = None,
+    parent_run_id: str | None = None,
     manifest: RunManifest | None = None,
     budget: BudgetTracker | None = None,
     eval_scope: bool = False,
@@ -136,6 +139,9 @@ def _execute_run(
         "run_id": run_id,
         "project_id": project_id,
         "case_id": ticket["case_id"],
+        "phase": phase,
+        "correction_id": correction_id,
+        "parent_run_id": parent_run_id,
         "action": action,
         "tool_calls": tool_calls,
         "transitions": budget.transitions,
@@ -185,6 +191,9 @@ def run_ticket(
     ledger: Ledger | None = None,
     mode: str | None = None,
     artifact_version: str = "v1",
+    phase: str = "ticket",
+    correction_id: str | None = None,
+    parent_run_id: str | None = None,
     budget: BudgetTracker | None = None,
     eval_scope: bool = False,
     manifest: RunManifest | None = None,
@@ -202,6 +211,9 @@ def run_ticket(
         ledger=ledger,
         mode=mode,
         artifact_version=artifact_version,
+        phase=phase,
+        correction_id=correction_id,
+        parent_run_id=parent_run_id,
         manifest=manifest,
         budget=budget,
         eval_scope=eval_scope,

@@ -135,6 +135,9 @@ def _run_trace_view(run: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "run_id": run.get("run_id"),
         "case_id": run.get("case_id"),
+        "phase": run.get("phase"),
+        "correction_id": run.get("correction_id"),
+        "parent_run_id": run.get("parent_run_id"),
         "action": run.get("action"),
         "oracle_action": run.get("oracle_action"),
         "mode": run.get("mode"),
@@ -153,7 +156,10 @@ def _run_trace_view(run: Mapping[str, Any]) -> dict[str, Any]:
         "transitions": run.get("transitions"),
         "max_transitions": run.get("max_transitions"),
         "cache_hit": bool(run.get("cache_hit", False)),
-        "artifact_hash": run.get("artifact_hash"),
+        # This identifies the complete pinned run manifest (ticket, code,
+        # model, and artifacts). It is not the hash of the corrected Redis
+        # document, so name it precisely in the judge-facing trace.
+        "manifest_hash": run.get("artifact_hash"),
         "read_set": _sanitize(run.get("read_set") or []),
         "evidence_calls": evidence_calls,
         "decision_iterations": run.get("decision_iterations"),
@@ -192,6 +198,8 @@ def _sanitize(value: Any) -> Any:
 
 
 def _compact_input(name: str, value: Any) -> Any:
+    if name in {"actor", "note", "human_confirmation"}:
+        return "<human input redacted>" if value else None
     if name == "ticket" and isinstance(value, Mapping):
         return _ticket_trace_view(value)
     if name == "tickets" and isinstance(value, Mapping):
@@ -272,28 +280,85 @@ def compact_shadow_output(output: Any) -> Any:
     if not isinstance(output, Mapping):
         return _postprocess_output(output)
     cases = list(output.get("cases") or [])
+    case_ids = list(
+        dict.fromkeys(
+            str(case.get("case_id"))
+            for case in cases
+            if isinstance(case, Mapping) and case.get("case_id")
+        )
+    )
+    regressions = list(
+        dict.fromkeys(
+            str(case.get("case_id"))
+            for case in cases
+            if isinstance(case, Mapping) and case.get("regressed") and case.get("case_id")
+        )
+    )
+    failed_cases = list(
+        dict.fromkeys(
+            str(case.get("case_id"))
+            for case in cases
+            if isinstance(case, Mapping) and not case.get("passed") and case.get("case_id")
+        )
+    )
+    pre_existing_failures = list(
+        dict.fromkeys(
+            str(case.get("case_id"))
+            for case in cases
+            if (
+                isinstance(case, Mapping)
+                and not case.get("baseline_passed")
+                and not case.get("passed")
+                and case.get("case_id")
+            )
+        )
+    )
     return {
         "id": output.get("id"),
+        "correction_id": output.get("correction_id"),
         "artifact_key": output.get("artifact_key"),
-        "case_count": len(cases),
-        "passed_count": sum(
+        "before_hash": output.get("before_hash"),
+        "after_hash": output.get("after_hash"),
+        "case_count": len(case_ids),
+        "evaluation_count": len(cases),
+        "passed_evaluation_count": sum(
             bool(case.get("passed")) for case in cases if isinstance(case, Mapping)
         ),
-        "regressions": [
-            case.get("case_id")
-            for case in cases
-            if isinstance(case, Mapping) and case.get("regressed")
-        ],
-        "failed_cases": [
-            case.get("case_id")
-            for case in cases
-            if isinstance(case, Mapping) and not case.get("passed")
-        ],
+        "pre_existing_failures": pre_existing_failures,
+        "regressions": regressions,
+        "failed_cases": failed_cases,
         "hero_improved": bool(output.get("hero_improved")),
         "no_regressions": bool(output.get("no_regressions")),
-        "passed": bool(output.get("passed")),
+        "gate_passed": bool(output.get("passed")),
+        "all_evaluations_passed": all(
+            bool(case.get("passed")) for case in cases if isinstance(case, Mapping)
+        ),
         "mode": output.get("mode"),
         "samples_per_case": output.get("samples_per_case"),
+    }
+
+
+def compact_approval_output(output: Any) -> Any:
+    """Expose the human decision and Redis proof without logging artifact contents."""
+    if not isinstance(output, Mapping):
+        return _postprocess_output(output)
+    patched_run = output.get("patched_run") or {}
+    return {
+        "approved": output.get("approval_decision") == "approved",
+        "approval_channel": output.get("approval_channel"),
+        "correction_id": output.get("correction_id"),
+        "artifact_key": output.get("artifact_key"),
+        "artifact_version": output.get("version"),
+        "before_hash": output.get("before_hash"),
+        "after_hash": output.get("after_hash"),
+        "no_op": bool(output.get("no_op", False)),
+        "projected_count": len(output.get("projected") or []),
+        "patched_run_id": patched_run.get("run_id")
+        if isinstance(patched_run, Mapping)
+        else None,
+        "parent_run_id": patched_run.get("parent_run_id")
+        if isinstance(patched_run, Mapping)
+        else None,
     }
 
 

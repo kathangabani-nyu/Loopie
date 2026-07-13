@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from src.loopie.observability import (
     _postprocess_inputs,
     _postprocess_output,
+    compact_approval_output,
     compact_episode_output,
     compact_run_output,
     compact_shadow_output,
@@ -75,6 +76,8 @@ def test_run_trace_keeps_decision_proof_but_drops_duplicate_raw_payloads():
         {
             "run_id": "run-123",
             "case_id": "security_002",
+            "phase": "patched",
+            "correction_id": "corr-1",
             "action": "escalate_security",
             "oracle_action": "escalate_security",
             "mode": "test",
@@ -90,11 +93,16 @@ def test_run_trace_keeps_decision_proof_but_drops_duplicate_raw_payloads():
             ],
             "artifacts_snapshot": {"large": "x" * 5_000},
             "run_manifest": {"large": "x" * 5_000},
+            "artifact_hash": "manifest-1",
             "trace": [{"large": "x" * 5_000}],
         }
     )
 
     assert output["action"] == "escalate_security"
+    assert output["phase"] == "patched"
+    assert output["correction_id"] == "corr-1"
+    assert output["manifest_hash"] == "manifest-1"
+    assert "artifact_hash" not in output
     assert output["tool_calls"] == ["escalate_tool"]
     assert output["policy_result"] == "allowed"
     assert output["evidence_calls"] == [
@@ -124,14 +132,23 @@ def test_episode_and_shadow_outputs_are_summary_first():
     shadow = compact_shadow_output(
         {
             "id": "shadow-1",
+            "correction_id": "corr-1",
             "artifact_key": "routing:rules",
+            "before_hash": "before-1",
+            "after_hash": "after-1",
             "cases": [
                 {
                     "case_id": "security_002",
+                    "baseline_passed": False,
                     "passed": True,
                     "correctness": {"raw": "x" * 5_000},
                 },
-                {"case_id": "refund_001", "passed": False, "regressed": True},
+                {
+                    "case_id": "refund_001",
+                    "baseline_passed": True,
+                    "passed": False,
+                    "regressed": True,
+                },
             ],
             "hero_improved": True,
             "no_regressions": False,
@@ -144,5 +161,71 @@ def test_episode_and_shadow_outputs_are_summary_first():
         {"name": "risk_score_lookup", "iteration": 1, "result_hash": "hash-1"}
     ]
     assert shadow["case_count"] == 2
+    assert shadow["evaluation_count"] == 2
+    assert shadow["correction_id"] == "corr-1"
+    assert shadow["before_hash"] == "before-1"
+    assert shadow["after_hash"] == "after-1"
     assert shadow["regressions"] == ["refund_001"]
+    assert shadow["gate_passed"] is False
+    assert shadow["all_evaluations_passed"] is False
+    assert "passed" not in shadow
     assert "cases" not in shadow
+
+
+def test_shadow_summary_distinguishes_gate_pass_from_universal_pass() -> None:
+    shadow = compact_shadow_output(
+        {
+            "cases": [
+                {
+                    "case_id": "security_001",
+                    "baseline_passed": False,
+                    "passed": True,
+                    "regressed": False,
+                },
+                {
+                    "case_id": "memory_001",
+                    "baseline_passed": False,
+                    "passed": False,
+                    "regressed": False,
+                },
+            ],
+            "hero_improved": True,
+            "no_regressions": True,
+            "passed": True,
+        }
+    )
+
+    assert shadow["gate_passed"] is True
+    assert shadow["all_evaluations_passed"] is False
+    assert shadow["pre_existing_failures"] == ["memory_001"]
+
+
+def test_approval_summary_keeps_human_and_artifact_proof_only() -> None:
+    approval = compact_approval_output(
+        {
+            "approval_decision": "approved",
+            "approval_channel": "hitl_chat",
+            "correction_id": "corr-1",
+            "artifact_key": "routing:rules",
+            "version": 2,
+            "before_hash": "before-1",
+            "after_hash": "after-1",
+            "value": {"secretly_large": "x" * 5_000},
+            "projected": [{"artifact_key": "routing:rules"}],
+            "patched_run": {"run_id": "run-2", "parent_run_id": "run-1"},
+        }
+    )
+
+    assert approval == {
+        "approved": True,
+        "approval_channel": "hitl_chat",
+        "correction_id": "corr-1",
+        "artifact_key": "routing:rules",
+        "artifact_version": 2,
+        "before_hash": "before-1",
+        "after_hash": "after-1",
+        "no_op": False,
+        "projected_count": 1,
+        "patched_run_id": "run-2",
+        "parent_run_id": "run-1",
+    }

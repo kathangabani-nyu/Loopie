@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from src.loopie.observability import compact_approval_output, op
 from src.loopie.reliability.corrections import project_pending_outbox
 from src.loopie.services.runs import RunService
 from src.loopie.stores.ledger import Ledger
@@ -14,12 +15,24 @@ from src.loopie.stores.redis_store import RedisStore
 ApprovalChannel = Literal["hitl_chat", "rest", "ui"]
 
 
+def _approval_display_name(call: Any) -> str:
+    inputs = getattr(call, "inputs", {}) or {}
+    correction_id = str(inputs.get("correction_id") or "correction")
+    return f"Human approval · {correction_id}"
+
+
 @dataclass
 class ApprovalService:
     ledger: Ledger
     redis: RedisStore
     runs: RunService
 
+    @op(
+        "corrections.approve",
+        call_display_name=_approval_display_name,
+        postprocess_output=compact_approval_output,
+        kind="tool",
+    )
     async def approve(
         self,
         correction_id: str,
@@ -73,7 +86,15 @@ class ApprovalService:
                     "correction_id": correction_id,
                 }
 
-        result = {**committed, "projected": projected, "patched_run": patched_run}
+        result = {
+            **committed,
+            "approval_decision": "approved",
+            "approval_channel": channel,
+            "before_hash": correction.get("before_hash"),
+            "after_hash": correction.get("after_hash"),
+            "projected": projected,
+            "patched_run": patched_run,
+        }
         self.runs.emit_event(
             "correction.approved",
             {"correction_id": correction_id, "patched_run": patched_run},

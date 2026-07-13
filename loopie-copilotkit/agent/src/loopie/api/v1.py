@@ -45,6 +45,14 @@ async def start_golden_demo(body: DemoStart, request: Request) -> Any:
     )
     if not readiness.get("weave_dashboard_ready"):
         raise HTTPException(status_code=503, detail="Golden Demo requires a configured Weave dashboard")
+    if readiness.get("llm_mode") != "live" or not readiness.get("provider_ready"):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Golden Demo requires live model execution: set LOOPIE_LLM_MODE=live, "
+                "LOOPIE_LIVE_CONFIRMED=1, and configure an enabled provider"
+            ),
+        )
     active = [
         run for run in await runtime.repository.list_runs(limit=500)
         if run.get("status") in {"queued", "running"}
@@ -65,9 +73,9 @@ async def start_golden_demo(body: DemoStart, request: Request) -> Any:
         raise HTTPException(status_code=503, detail="security_001 fixture is not seeded")
     queued = await runtime.runs.queue_ticket_run(
         ticket_id=str(ticket["id"]),
-        mode="test",
+        mode="live",
         kind="golden",
-        idempotency_key="demo:security_001:baseline",
+        idempotency_key="demo:security_001:live:baseline",
     )
     return jsonable_encoder(
         {
@@ -75,6 +83,7 @@ async def start_golden_demo(body: DemoStart, request: Request) -> Any:
             "scenario": "security_001",
             "run_id": queued["run"]["id"],
             "status": queued["run"]["status"],
+            "mode": "live",
         }
     )
 
