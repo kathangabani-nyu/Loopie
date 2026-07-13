@@ -326,7 +326,7 @@ def compact_shadow_output(output: Any) -> Any:
             )
         )
     )
-    return {
+    summary = {
         "id": output.get("id"),
         "correction_id": output.get("correction_id"),
         "artifact_key": output.get("artifact_key"),
@@ -349,6 +349,19 @@ def compact_shadow_output(output: Any) -> Any:
         "mode": output.get("mode"),
         "samples_per_case": output.get("samples_per_case"),
     }
+    weave_evaluations = output.get("weave_evaluations") or {}
+    if isinstance(weave_evaluations, Mapping):
+        summary["weave_evaluations"] = {
+            str(phase): {
+                "name": evidence.get("name"),
+                "status": evidence.get("status"),
+                "url": evidence.get("url"),
+                "error": evidence.get("error"),
+            }
+            for phase, evidence in weave_evaluations.items()
+            if isinstance(evidence, Mapping)
+        }
+    return summary
 
 
 def compact_approval_output(output: Any) -> Any:

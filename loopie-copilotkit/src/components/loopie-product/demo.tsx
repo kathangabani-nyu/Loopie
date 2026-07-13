@@ -94,6 +94,8 @@ export function GoldenDemo() {
   const failedShadow = scenarioCorrections.find(row => row.status === "shadow_failed" || row.shadow_passed === false);
   const baselineDecision = record(baseline?.decision);
   const patchedDecision = record(patched?.decision);
+  const baselineNativeEvaluation = record(baselineDecision.weave_evaluation);
+  const patchedNativeEvaluation = record(patchedDecision.weave_evaluation);
   const improvement = record(patchedDecision.improvement_proof);
   const manifest = record(baselineDecision.run_manifest);
   const ticket = record(manifest.ticket_snapshot);
@@ -153,10 +155,10 @@ export function GoldenDemo() {
     {baseline && patched ? <section className="lp-section">
       <h2 className="lp-section-title">Before / after verification</h2>
       <div className="lp-compare-grid">
-        {[{label: "Baseline", run: baseline, decision: baselineDecision, evaluation: baselineEvaluation}, {label: "Patched", run: patched, decision: patchedDecision, evaluation: patchedEvaluation}].map(item => <article className="lp-card" key={item.label}>
+        {[{label: "Baseline", run: baseline, decision: baselineDecision, evaluation: baselineEvaluation, nativeEvaluation: baselineNativeEvaluation}, {label: "Patched", run: patched, decision: patchedDecision, evaluation: patchedEvaluation, nativeEvaluation: patchedNativeEvaluation}].map(item => <article className="lp-card" key={item.label}>
           <div className="lp-review-heading"><div><div className="lp-card-label">{item.label}</div><h3>{String(item.decision.action ?? "pending")}</h3></div><span className="lp-pill" data-status={statusTone(item.evaluation)}>{item.evaluation}</span></div>
           <dl className="lp-key-values"><div><dt>Run</dt><dd className="lp-mono">{String(item.run.id)}</dd></div><div><dt>Evidence</dt><dd>{String(item.run.evidence_status ?? "pending")}</dd></div><div><dt>Fallback</dt><dd>{String(item.decision.fallback_used ?? false)}</dd></div></dl>
-          <div className="lp-review-actions"><Link href={`/runs/${String(item.run.id)}`}>Open run evidence →</Link>{typeof item.run.weave_url === "string" ? <a href={item.run.weave_url} target="_blank" rel="noreferrer">Open Weave trace ↗</a> : null}</div>
+          <div className="lp-review-actions"><Link href={`/runs/${String(item.run.id)}`}>Open run evidence →</Link>{typeof item.run.weave_url === "string" ? <a href={item.run.weave_url} target="_blank" rel="noreferrer">Open Weave trace ↗</a> : null}{typeof item.nativeEvaluation.url === "string" ? <a href={item.nativeEvaluation.url} target="_blank" rel="noreferrer">Open Weave evaluation ↗</a> : null}</div>
         </article>)}
       </div>
       {improvement.improvement_proven === true ? <div className="lp-card lp-proof-banner"><strong>Improvement proven</strong><span>Baseline failed → patched passed</span><span>No regressed scores</span><span className="lp-mono">correction {String(improvement.correction_id)}</span></div> : null}

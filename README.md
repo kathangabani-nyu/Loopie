@@ -278,12 +278,12 @@ A summary of the invariants the codebase enforces (see [`loopie-copilotkit/CLAUD
 Weave is wired in as the eval-compare layer, not bolted-on logging:
 
 - **Traces** — every swarm node, scorer, and diagnosis op is a `@weave.op` with DSN/secret redaction; per-node latency and tool surfaces are inspectable per run.
-- **Eval suites** — `weave.Evaluation` runs the ticket batch against artifact `v1` (baseline) and `v2` (patched) with identical scorers, producing a side-by-side comparison.
+- **Native Golden Demo evaluations** — `weave.EvaluationLogger` wraps the real live baseline, shadow baseline/candidate suite, and applied rerun already executed by the product. It publishes comparable `v1`, `v2_candidate`, and applied `v2` evaluations without duplicating OpenAI calls.
 - **Proof columns** — before/after artifact content hashes and the correction id are attached as eval attributes, tying the dashboard back to the Postgres audit trail.
 - **Concise run columns** — `loopie.run` exposes stable top-level outputs for `case_id`, `phase`, `evaluation_status`, `action`, `model_action`, `policy_enforced_by`, `mode`, `decided_by`, `fallback_used`, `wall_clock_ms`, and `run_id`. These are the recommended saved-view columns; no synthesized `summary.weave.latency_ms` field is required.
 - **Deep links** — the cockpit surfaces live trace and baseline-vs-patched eval links.
 
-Weave runs independently of the LLM mode: with `LOOPIE_LLM_MODE=test` you get full observability at zero token cost. Weave is intentionally **never the only evidence store** — the run record in Postgres remains authoritative.
+Weave tracing runs independently of the LLM mode: with `LOOPIE_LLM_MODE=test` you get full trace observability at zero token cost. Native Golden Demo evaluations are published for the live judged path. Weave is intentionally **never the only evidence store** — the run record in Postgres remains authoritative.
 
 ---
 

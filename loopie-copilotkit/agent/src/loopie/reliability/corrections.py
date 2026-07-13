@@ -10,6 +10,12 @@ from typing import Any
 from src.loopie.artifacts import build_artifact_proof
 from src.loopie.llm import DECISION_PROMPT_VERSION, DECISION_SCHEMA_VERSION
 from src.loopie.manifests import ArtifactSnapshot, RunManifest, build_run_manifest
+from src.loopie.native_evals import (
+    compact_evaluation_output,
+    create_native_evaluation,
+    evaluation_row,
+    flatten_correctness,
+)
 from src.loopie.observability import compact_shadow_output, op
 from src.loopie.reliability.scorers import score_layers
 from src.loopie.runner import run_ticket
@@ -265,6 +271,39 @@ def shadow_evaluate_correction(
     case_ids.extend(tickets)
     case_ids = list(dict.fromkeys(case_ids))[:30]
     samples = samples or (3 if mode == "live" else 1)
+    dataset_rows = [evaluation_row(tickets[case_id]) for case_id in case_ids]
+    publish_native_evals = mode == "live" and hero_case_id == "security_001"
+    baseline_evaluation = create_native_evaluation(
+        name=f"Loopie shadow baseline v1 · {correction['id']}",
+        dataset_name="loopie_golden_shadow_suite",
+        dataset_rows=dataset_rows,
+        model=f"loopie-agent:v1:{artifact_proof['before_hash']}",
+        attributes={
+            "compare_group": "loopie_golden_shadow_suite",
+            "iteration": "baseline",
+            "artifact_version": "v1",
+            "artifact_hash": artifact_proof["before_hash"],
+            "correction_id": correction["id"],
+            "hero_case_id": hero_case_id,
+        },
+        enabled=publish_native_evals,
+    )
+    candidate_evaluation = create_native_evaluation(
+        name=f"Loopie shadow candidate v2 · {correction['id']}",
+        dataset_name="loopie_golden_shadow_suite",
+        dataset_rows=dataset_rows,
+        model=f"loopie-agent:v2:{artifact_proof['after_hash']}",
+        attributes={
+            "compare_group": "loopie_golden_shadow_suite",
+            "iteration": "candidate",
+            "artifact_version": "v2_candidate",
+            "artifact_hash": artifact_proof["after_hash"],
+            "correction_id": correction["id"],
+            "hero_case_id": hero_case_id,
+        },
+        enabled=publish_native_evals,
+    )
+    baseline_results: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     for case_id in case_ids:
         ticket = tickets[case_id]
@@ -275,17 +314,25 @@ def shadow_evaluate_correction(
             schema_version=DECISION_SCHEMA_VERSION,
             model_version="shadow-baseline",
         )
-        baseline_run = run_ticket(
-            ticket,
-            redis=redis,
-            ledger=ledger,
-            mode=mode,
-            artifact_version=f"{baseline_manifest.content_hash[:12]}:baseline",
-            phase="shadow_baseline",
-            correction_id=correction["id"],
-            manifest=baseline_manifest,
-        )
-        baseline_passed = bool(score_layers(baseline_run, ticket)["passed"])
+        with baseline_evaluation.prediction(evaluation_row(ticket)) as prediction:
+            baseline_run = run_ticket(
+                ticket,
+                redis=redis,
+                ledger=ledger,
+                mode=mode,
+                artifact_version=f"{baseline_manifest.content_hash[:12]}:baseline",
+                phase="shadow_baseline",
+                correction_id=correction["id"],
+                manifest=baseline_manifest,
+            )
+            baseline_correctness = score_layers(baseline_run, ticket)
+            baseline_passed = bool(baseline_correctness["passed"])
+            baseline_evaluation.record(
+                prediction,
+                output=compact_evaluation_output(baseline_run),
+                scores=flatten_correctness(baseline_correctness),
+            )
+        baseline_results.append({"case_id": case_id, "passed": baseline_passed})
         for sample in range(samples):
             manifest = build_run_manifest(
                 redis,
@@ -295,18 +342,24 @@ def shadow_evaluate_correction(
                 model_version="shadow",
             )
             shadow_manifest = _candidate_manifest(manifest, artifact_key, candidate)
-            run = run_ticket(
-                ticket,
-                redis=redis,
-                ledger=ledger,
-                mode=mode,
-                artifact_version=f"{shadow_manifest.content_hash[:12]}:{sample}",
-                phase="shadow_candidate",
-                correction_id=correction["id"],
-                manifest=shadow_manifest,
-            )
-            correctness = score_layers(run, ticket)
-            shadow_passed = bool(correctness["passed"])
+            with candidate_evaluation.prediction(evaluation_row(ticket)) as prediction:
+                run = run_ticket(
+                    ticket,
+                    redis=redis,
+                    ledger=ledger,
+                    mode=mode,
+                    artifact_version=f"{shadow_manifest.content_hash[:12]}:{sample}",
+                    phase="shadow_candidate",
+                    correction_id=correction["id"],
+                    manifest=shadow_manifest,
+                )
+                correctness = score_layers(run, ticket)
+                shadow_passed = bool(correctness["passed"])
+                candidate_evaluation.record(
+                    prediction,
+                    output=compact_evaluation_output(run, sample=sample + 1),
+                    scores=flatten_correctness(correctness),
+                )
             results.append(
                 {
                     "case_id": case_id,
@@ -320,6 +373,26 @@ def shadow_evaluate_correction(
     hero_results = [r for r in results if r["case_id"] == hero_case_id]
     hero_improved = all(r["passed"] for r in hero_results)
     no_regressions = not any(r["regressed"] for r in results)
+    weave_evaluations = {
+        "baseline": baseline_evaluation.finish(
+            {
+                "passed": sum(bool(row["passed"]) for row in baseline_results),
+                "failed": sum(not bool(row["passed"]) for row in baseline_results),
+                "total": len(baseline_results),
+                "artifact_version": "v1",
+            }
+        ),
+        "candidate": candidate_evaluation.finish(
+            {
+                "passed": sum(bool(row["passed"]) for row in results),
+                "failed": sum(not bool(row["passed"]) for row in results),
+                "total": len(results),
+                "artifact_version": "v2_candidate",
+                "hero_improved": hero_improved,
+                "no_regressions": no_regressions,
+            }
+        ),
+    }
     return {
         "id": f"shadow_{uuid.uuid4().hex[:12]}",
         "artifact_key": artifact_key,
@@ -330,6 +403,7 @@ def shadow_evaluate_correction(
         "passed": hero_improved and no_regressions,
         "mode": mode,
         "samples_per_case": samples,
+        "weave_evaluations": weave_evaluations,
     }
 
 

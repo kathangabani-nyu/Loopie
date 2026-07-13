@@ -11,6 +11,12 @@ from src.loopie.config import get_settings, normalize_llm_mode
 from src.loopie.jobs import Job, MemoryJobStore, PostgresJobStore
 from src.loopie.llm import DECISION_PROMPT_VERSION, DECISION_SCHEMA_VERSION
 from src.loopie.manifests import ManifestReader, build_run_manifest
+from src.loopie.native_evals import (
+    compact_evaluation_output,
+    create_native_evaluation,
+    evaluation_row,
+    flatten_correctness,
+)
 from src.loopie.product_repository import ProductRepository
 from src.loopie.runner import run_ticket
 from src.loopie.reliability.scorers import score_layers
@@ -128,25 +134,71 @@ class RunService:
                         if golden_annotation.get(key) is not None
                     }
                 )
-        result = await asyncio.to_thread(
-            run_ticket,
-            agent_ticket,
-            redis=self.redis,
-            ledger=self.ledger,
-            mode=str(run["mode"]),
-            artifact_version=manifest.content_hash[:16],
-            phase="baseline" if str(run["kind"]) == "golden" else str(run["kind"]),
-            correction_id=str(run["correction_id"]) if run.get("correction_id") else None,
-            parent_run_id=str(run["parent_run_id"]) if run.get("parent_run_id") else None,
-            manifest=manifest,
-            run_id=run_id,
-            project_id=job.project_id,
+        run_kind = str(run["kind"])
+        evaluation_phase = "baseline" if run_kind == "golden" else "applied_patch"
+        artifact_label = "v1" if run_kind == "golden" else "v2"
+        evaluation_ticket = {**agent_ticket, **(golden_annotation or {})}
+        native_evaluation = create_native_evaluation(
+            name=f"Loopie Golden {evaluation_phase} {artifact_label} · {run_id[:8]}",
+            dataset_name="loopie_golden_demo",
+            dataset_rows=[evaluation_row(evaluation_ticket)],
+            model=(
+                f"{get_settings().openai_model}:{artifact_label}:"
+                f"{manifest.content_hash[:16]}"
+            ),
+            attributes={
+                "compare_group": "loopie_golden_demo",
+                "iteration": evaluation_phase,
+                "artifact_version": artifact_label,
+                "artifact_hash": manifest.content_hash,
+                "run_id": run_id,
+                "correction_id": (
+                    str(run["correction_id"]) if run.get("correction_id") else None
+                ),
+            },
+            enabled=(
+                run_kind in {"golden", "patched"} and str(run["mode"]) == "live"
+            ),
         )
-        result["correctness"] = score_layers(
-            result,
-            agent_ticket,
-            golden_annotation=golden_annotation,
+        with native_evaluation.prediction(evaluation_row(evaluation_ticket)) as prediction:
+            result = await asyncio.to_thread(
+                run_ticket,
+                agent_ticket,
+                redis=self.redis,
+                ledger=self.ledger,
+                mode=str(run["mode"]),
+                artifact_version=manifest.content_hash[:16],
+                phase="baseline" if run_kind == "golden" else run_kind,
+                correction_id=(
+                    str(run["correction_id"]) if run.get("correction_id") else None
+                ),
+                parent_run_id=(
+                    str(run["parent_run_id"]) if run.get("parent_run_id") else None
+                ),
+                manifest=manifest,
+                run_id=run_id,
+                project_id=job.project_id,
+            )
+            result["correctness"] = score_layers(
+                result,
+                agent_ticket,
+                golden_annotation=golden_annotation,
+            )
+            native_evaluation.record(
+                prediction,
+                output=compact_evaluation_output(result),
+                scores=flatten_correctness(result["correctness"]),
+            )
+        evaluation_evidence = native_evaluation.finish(
+            {
+                "passed": bool(result["correctness"]["passed"]),
+                "run_id": run_id,
+                "phase": evaluation_phase,
+                "artifact_version": artifact_label,
+            }
         )
+        if evaluation_evidence["status"] != "disabled":
+            result["weave_evaluation"] = evaluation_evidence
         if not result["correctness"]["passed"]:
             classification = await classify_production_failure(
                 ticket=agent_ticket,
