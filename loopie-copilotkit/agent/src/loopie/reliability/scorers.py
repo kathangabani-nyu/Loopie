@@ -44,6 +44,21 @@ def memory_version_correct(run: dict[str, Any], ticket: dict[str, Any]) -> bool:
     return int(run.get("memory_version", 1)) >= expected_version
 
 
+def required_policy_rules_present(run: dict[str, Any], ticket: dict[str, Any]) -> bool:
+    """Require explicitly pinned approved policies without exposing labels to the model."""
+
+    required = {str(rule_id) for rule_id in ticket.get("required_policy_rule_ids") or []}
+    if not required:
+        return True
+    artifacts = run.get("artifacts_snapshot") or {}
+    approved = {
+        str(rule.get("rule_id"))
+        for rule in artifacts.get("policy_rules") or []
+        if rule.get("status") == "approved"
+    }
+    return required.issubset(approved)
+
+
 def live_decision_honest(run: dict[str, Any], ticket: dict[str, Any]) -> bool:
     """Live LLM path must not silently fall back to oracle. Cache hits still count as honest."""
     decided_by = run.get("decided_by", "oracle")
@@ -80,6 +95,7 @@ SCORERS = {
     "loop_count_under_limit": loop_count_under_limit,
     "tool_calls_under_budget": tool_calls_under_budget,
     "memory_version_correct": memory_version_correct,
+    "required_policy_rules_present": required_policy_rules_present,
     "live_decision_honest": live_decision_honest,
     "oracle_match": oracle_match,
     "action_in_taxonomy": action_in_taxonomy,
@@ -153,6 +169,7 @@ def score_layers(
             "action_match": action_match(run, golden_ticket),
             "required_policy_checked": required_policy_checked(run, golden_ticket),
             "memory_version_correct": memory_version_correct(run, golden_ticket),
+            "required_policy_rules_present": required_policy_rules_present(run, golden_ticket),
         }
 
     return {

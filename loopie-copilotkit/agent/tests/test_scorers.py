@@ -41,6 +41,34 @@ def test_security_patched_passes():
     assert run_passed(scores) is True
 
 
+def test_required_policy_rule_is_a_deterministic_golden_gate():
+    ticket = {
+        "case_id": "security_001",
+        "expected_action": "escalate_security",
+        "required_policy_rule_ids": ["security_flag_requires_escalation"],
+    }
+    run = {
+        "action": "escalate_security",
+        "tool_calls": [{"name": "escalate_tool"}],
+        "artifacts_snapshot": {"policy_rules": []},
+    }
+
+    baseline = score_run(run, ticket)
+    assert baseline["action_match"] is True
+    assert baseline["required_policy_rules_present"] is False
+
+    run["artifacts_snapshot"] = {
+        "policy_rules": [
+            {
+                "rule_id": "security_flag_requires_escalation",
+                "status": "approved",
+            }
+        ]
+    }
+    patched = score_run(run, ticket)
+    assert patched["required_policy_rules_present"] is True
+
+
 def test_live_decision_honest_fails_on_oracle_fallback():
     ticket = {"case_id": "security_001", "expected_action": "escalate_security"}
     run = {

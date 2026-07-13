@@ -42,6 +42,7 @@ GOLDEN_FIELDS = {
     "neighbors",
     "expected_failure_baseline",
     "expected_memory_version",
+    "required_policy_rule_ids",
     "diagnosis_hint",
 }
 
@@ -497,7 +498,12 @@ def _seed_fixtures() -> None:
         )
         expected_metadata = {
             key: fixture[key]
-            for key in ("expected_failure_baseline", "expected_memory_version", "diagnosis_hint")
+            for key in (
+                "expected_failure_baseline",
+                "expected_memory_version",
+                "required_policy_rule_ids",
+                "diagnosis_hint",
+            )
             if key in fixture
         }
         annotation_id = uuid.uuid5(namespace, f"golden:{fixture['case_id']}")

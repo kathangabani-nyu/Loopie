@@ -18,7 +18,7 @@ from typing import Any
 from src.loopie.taxonomy import DEFAULT_ACTIONS, parse_taxonomy
 
 DEFAULT_PROJECT_ID = "00000000-0000-0000-0000-000000000001"
-SCORER_VERSION = "v2"
+SCORER_VERSION = "v3"
 KNOWN_MEMORY_KEYS = ("policy:refund_window", "policy:vat_reverse_charge")
 
 

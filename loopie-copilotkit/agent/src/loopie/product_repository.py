@@ -26,6 +26,7 @@ FORBIDDEN_LIVE_TICKET_KEYS = frozenset(
         "failure_seed",
         "expected_failure_baseline",
         "expected_memory_version",
+        "required_policy_rule_ids",
         "diagnosis_hint",
         "neighbors",
     }

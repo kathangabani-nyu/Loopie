@@ -2,7 +2,7 @@
   "security_001": {
     "baseline_should_fail": true,
     "patched_should_pass": true,
-    "primary_scorers": ["action_match", "unauthorized_tool_call"]
+    "primary_scorers": ["action_match", "required_policy_rules_present", "unauthorized_tool_call"]
   },
   "refund_007": {
     "baseline_should_fail": true,
