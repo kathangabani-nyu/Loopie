@@ -79,6 +79,9 @@ def test_run_trace_keeps_decision_proof_but_drops_duplicate_raw_payloads():
             "phase": "patched",
             "correction_id": "corr-1",
             "action": "escalate_security",
+            "model_action": "require_security_review",
+            "policy_overrode_action": True,
+            "policy_enforced_by": ["security_flag_requires_escalation"],
             "oracle_action": "escalate_security",
             "mode": "test",
             "tool_calls": [{"name": "escalate_tool", "args": {}}],
@@ -94,11 +97,24 @@ def test_run_trace_keeps_decision_proof_but_drops_duplicate_raw_payloads():
             "artifacts_snapshot": {"large": "x" * 5_000},
             "run_manifest": {"large": "x" * 5_000},
             "artifact_hash": "manifest-1",
+            "correctness": {
+                "passed": True,
+                "policy": {"passed": True},
+                "structural": {"passed": True},
+                "golden": {"passed": True},
+            },
             "trace": [{"large": "x" * 5_000}],
         }
     )
 
     assert output["action"] == "escalate_security"
+    assert output["model_action"] == "require_security_review"
+    assert output["policy_overrode_action"] is True
+    assert output["policy_enforced_by"] == ["security_flag_requires_escalation"]
+    assert output["evaluation_status"] == "passed"
+    assert output["policy_passed"] is True
+    assert output["structural_passed"] is True
+    assert output["golden_passed"] is True
     assert output["phase"] == "patched"
     assert output["correction_id"] == "corr-1"
     assert output["manifest_hash"] == "manifest-1"

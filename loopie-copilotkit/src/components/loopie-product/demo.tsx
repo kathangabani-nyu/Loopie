@@ -29,47 +29,69 @@ export function GoldenDemo() {
   const runs = useResource<Record<string, unknown>[]>("runs?limit=50", []);
   const failures = useResource<Record<string, unknown>[]>("failures?limit=50", []);
   const corrections = useResource<Record<string, unknown>[]>("corrections?limit=50", []);
-  const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<"reset" | "start" | "propose" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   async function reset() {
-    setBusy(true); setMessage("Restoring the known missing-guard baseline without running it.");
-    const response = await fetch("/api/loopie/v1/demo/reset", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({confirm: "RESET_DEMO"}),
-    });
-    const payload = await response.json();
-    setMessage(response.ok ? "Broken baseline restored. Click Start golden demo when you are ready." : payload.detail ?? payload.error ?? "Demo reset failed");
-    await Promise.all([runs.refresh(), failures.refresh(), corrections.refresh()]);
-    setBusy(false);
+    setBusyAction("reset"); setMessage("Restoring the known missing-guard baseline without running it.");
+    try {
+      const response = await fetch("/api/loopie/v1/demo/reset", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({confirm: "RESET_DEMO"}),
+      });
+      const payload = await response.json();
+      setMessage(response.ok ? "Broken baseline restored. Nothing is running; start when ready." : payload.detail ?? payload.error ?? "Demo reset failed");
+      await Promise.all([runs.refresh(), failures.refresh(), corrections.refresh()]);
+    } catch {
+      setMessage("Demo reset failed before the backend responded.");
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   async function start() {
-    setBusy(true); setMessage("Queuing security_001 against the broken baseline.");
-    const response = await fetch("/api/loopie/v1/demo/start", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({confirm: "START_DEMO"}),
-    });
-    const payload = await response.json();
-    setMessage(response.ok ? `Baseline queued: ${payload.run_id}` : payload.detail ?? payload.error ?? "Demo start failed");
-    await Promise.all([runs.refresh(), failures.refresh(), corrections.refresh()]);
-    setBusy(false);
+    setBusyAction("start"); setMessage("Queuing security_001 against the broken baseline.");
+    try {
+      const response = await fetch("/api/loopie/v1/demo/start", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({confirm: "START_DEMO"}),
+      });
+      const payload = await response.json();
+      setMessage(response.ok ? `Baseline queued: ${payload.run_id}` : payload.detail ?? payload.error ?? "Demo start failed");
+      await Promise.all([runs.refresh(), failures.refresh(), corrections.refresh()]);
+    } catch {
+      setMessage("Demo start failed before the backend responded.");
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   async function propose(id: string) {
-    setBusy(true); setMessage("Generating and shadow-testing the correction. Keep this page open.");
-    const response = await fetch(`/api/loopie/v1/failures/${id}/corrections`, {method: "POST"});
-    const payload = await response.json();
-    setMessage(response.ok ? `Correction ${payload.id} passed its shadow gate and is ready for review.` : payload.detail ?? payload.error ?? "Correction generation failed");
-    await Promise.all([failures.refresh(), corrections.refresh()]);
-    setBusy(false);
+    setBusyAction("propose"); setMessage("Generating and shadow-testing the correction. Keep this page open.");
+    try {
+      const response = await fetch(`/api/loopie/v1/failures/${id}/corrections`, {method: "POST"});
+      const payload = await response.json();
+      setMessage(response.ok
+        ? payload.shadow_passed
+          ? `Correction ${payload.id} passed its shadow gate and is ready for review.`
+          : `Correction ${payload.id} failed its shadow gate. Nothing changed; inspect the trace and retry.`
+        : payload.detail ?? payload.error ?? "Correction generation failed");
+      await Promise.all([failures.refresh(), corrections.refresh()]);
+    } catch {
+      setMessage("Correction generation failed before the backend responded.");
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   const demoRuns = runs.data.filter(row => row.kind === "golden" || row.kind === "patched");
   const baseline = demoRuns.find(row => row.kind === "golden");
   const patched = demoRuns.find(row => row.kind === "patched" && (!baseline || row.parent_run_id === baseline.id));
   const failure = failures.data.find(row => row.external_id === "security_001");
-  const correction = corrections.data.find(row => row.failure_case === "security_001");
+  const scenarioCorrections = corrections.data.filter(row => row.failure_case === "security_001");
+  const correction = scenarioCorrections[0];
+  const readyCorrection = scenarioCorrections.find(row => row.status === "proposed" && row.shadow_passed === true);
+  const failedShadow = scenarioCorrections.find(row => row.status === "shadow_failed" || row.shadow_passed === false);
   const baselineDecision = record(baseline?.decision);
   const patchedDecision = record(patched?.decision);
   const improvement = record(patchedDecision.improvement_proof);
@@ -84,7 +106,7 @@ export function GoldenDemo() {
   const stages = [
     {label: "1. Baseline", status: baselineEvaluation, detail: baseline ? String(baseline.id) : "Ready for an explicit start"},
     {label: "2. Failure evidence", status: failureStatus, detail: failure ? `${String(failure.category)} · ${String(failure.layer)}` : "Waiting for deterministic checks"},
-    {label: "3. Human correction", status: correctionStatus, detail: correction ? `${String(correction.kind)} · shadow ${correction.shadow_passed ? "passed" : "pending"}` : "No artifact change proposed"},
+    {label: "3. Human correction", status: correctionStatus, detail: correction ? `${String(correction.kind)} · shadow ${correction.shadow_passed ? "passed" : "failed"}` : "No artifact change proposed"},
     {label: "4. Patched verification", status: patchedEvaluation, detail: patched ? String(patched.id) : "Approval queues the identical rerun"},
   ];
 
@@ -92,8 +114,11 @@ export function GoldenDemo() {
     <header className="lp-header"><div><h1>Golden Demo</h1><p>One engineering workflow: reproduce the failure, inspect evidence, review the durable change, and verify the identical rerun.</p></div><div className="lp-live">Weave connected</div></header>
 
     <section className="lp-card lp-demo-control">
-      <div><div className="lp-card-label">Pinned scenario</div><h2>security_001 · security-flagged $12,450 refund</h2><p>Reset deletes prior demo run/evidence state and restores the intentionally missing routing guard. Seeded tickets and golden annotations remain.</p></div>
-      <button className="lp-button" disabled={busy} onClick={() => void (baseline ? reset() : start())}>{busy ? "Working…" : baseline ? "Reset demo to broken baseline" : "Start golden demo"}</button>
+      <div><div className="lp-card-label">Pinned scenario</div><h2>security_001 · security-flagged $12,450 refund</h2><p>Reset restores the broken artifact state only. Start is separate, so reset can never queue a baseline run.</p></div>
+      <div className="lp-demo-actions">
+        <button className="lp-button lp-button-secondary" disabled={busyAction !== null} aria-busy={busyAction === "reset"} onClick={() => void reset()}>{busyAction === "reset" ? <><span className="lp-button-spinner" aria-hidden="true" />Resetting</> : "Reset to broken baseline"}</button>
+        <button className="lp-button" disabled={busyAction !== null || Boolean(baseline)} aria-busy={busyAction === "start"} onClick={() => void start()}>{busyAction === "start" ? <><span className="lp-button-spinner" aria-hidden="true" />Starting</> : "Start golden demo"}</button>
+      </div>
       {message ? <div className="lp-demo-message">{message}</div> : null}
     </section>
 
@@ -115,13 +140,13 @@ export function GoldenDemo() {
       </div>
     </section> : null}
 
-    {failure?.status === "open" && !correction ? <section className="lp-section lp-card lp-demo-next">
-      <div><div className="lp-card-label">Next required action</div><h2>Generate a candidate correction</h2><p>The baseline completed but violated the approved security policy. Generation creates a versioned artifact diff and runs the hero plus holdouts without mutating production state.</p></div>
-      <div className="lp-review-actions"><Link href={`/failures/${String(failure.id)}`}>Inspect failure first →</Link><button className="lp-button" disabled={busy} onClick={() => void propose(String(failure.id))}>Generate and shadow-test correction</button></div>
+    {failure?.status === "open" && !readyCorrection ? <section className="lp-section lp-card lp-demo-next">
+      <div><div className="lp-card-label">Next required action</div><h2>{failedShadow ? "Retry the candidate correction" : "Generate a candidate correction"}</h2><p>{failedShadow ? "The last candidate failed its shadow gate, so it is not approval-eligible and changed nothing." : "Generation creates a versioned artifact diff and tests the hero plus holdouts without mutating production state."}</p></div>
+      <div className="lp-review-actions"><Link href={`/failures/${String(failure.id)}`}>Inspect failure first →</Link><button className="lp-button" disabled={busyAction !== null} aria-busy={busyAction === "propose"} onClick={() => void propose(String(failure.id))}>{busyAction === "propose" ? <><span className="lp-button-spinner" aria-hidden="true" />Shadow testing</> : "Generate and shadow-test"}</button></div>
     </section> : null}
 
-    {correction?.status === "proposed" ? <section className="lp-section lp-card lp-demo-next">
-      <div><div className="lp-card-label">Human approval required</div><h2>{String(record(correction.payload).summary ?? "Review the proposed artifact change")}</h2><p>Shadow gate: <strong>{correction.shadow_passed ? "passed" : "pending"}</strong>. No live artifact changes until approval.</p></div>
+    {readyCorrection ? <section className="lp-section lp-card lp-demo-next">
+      <div><div className="lp-card-label">Human approval required</div><h2>{String(record(readyCorrection.payload).summary ?? "Review the proposed artifact change")}</h2><p>Shadow gate: <strong>passed</strong>. No live artifact changes until approval.</p></div>
       <Link className="lp-button" href="/corrections">Review diff, blast radius, and approve →</Link>
     </section> : null}
 

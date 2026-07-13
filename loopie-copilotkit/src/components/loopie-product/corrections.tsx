@@ -21,31 +21,42 @@ export function Corrections() {
   const [message, setMessage] = useState<string | null>(null);
   const [patchedRun, setPatchedRun] = useState<string | null>(null);
   const [reviewed, setReviewed] = useState<Record<string, boolean>>({});
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   useEffect(() => {
     if (resource.data.length > 0) return;
     const timer = window.setInterval(() => void resource.refresh(), 3_000);
     return () => window.clearInterval(timer);
   }, [resource.data.length, resource.refresh]);
   async function approve(id: string) {
-    const response = await fetch(`/api/loopie/v1/corrections/${id}/approve`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actor: "owner", channel: "ui" }),
-    });
-    const payload = await response.json();
-    const runId = payload.patched_run?.run_id ? String(payload.patched_run.run_id) : null;
-    setPatchedRun(response.ok ? runId : null);
-    setMessage(response.ok ? `Applied ${id}; patched rerun ${runId ?? "not required"} queued.` : payload.detail ?? payload.error);
-    setReviewed(current => ({ ...current, [id]: false }));
-    await resource.refresh();
+    setBusyAction(`approve:${id}`);
+    try {
+      const response = await fetch(`/api/loopie/v1/corrections/${id}/approve`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actor: "owner", channel: "ui" }),
+      });
+      const payload = await response.json();
+      const runId = payload.patched_run?.run_id ? String(payload.patched_run.run_id) : null;
+      setPatchedRun(response.ok ? runId : null);
+      setMessage(response.ok ? `Applied ${id}; patched rerun ${runId ?? "not required"} queued.` : payload.detail ?? payload.error);
+      setReviewed(current => ({ ...current, [id]: false }));
+      await resource.refresh();
+    } finally {
+      setBusyAction(null);
+    }
   }
   async function reject(id: string) {
-    const response = await fetch(`/api/loopie/v1/corrections/${id}/reject`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actor: "owner", channel: "ui" }),
-    });
-    const payload = await response.json();
-    setMessage(response.ok ? `Rejected ${id}; artifacts were not changed.` : payload.detail ?? payload.error);
-    await resource.refresh();
+    setBusyAction(`reject:${id}`);
+    try {
+      const response = await fetch(`/api/loopie/v1/corrections/${id}/reject`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actor: "owner", channel: "ui" }),
+      });
+      const payload = await response.json();
+      setMessage(response.ok ? `Rejected ${id}; artifacts were not changed.` : payload.detail ?? payload.error);
+      await resource.refresh();
+    } finally {
+      setBusyAction(null);
+    }
   }
   return <>
     <header className="lp-header"><div><h1>Corrections</h1><p>Only passing shadow proposals can cross the human approval boundary.</p></div><div className="lp-live">Live updates</div></header>
@@ -88,8 +99,8 @@ export function Corrections() {
             I reviewed the failure evidence, artifact diff, blast radius, and passing shadow result.
           </label>
           <div className="lp-review-actions">
-            <button className="lp-button" disabled={!reviewed[id]} onClick={() => void approve(id)}>Approve, apply, and rerun</button>
-            <button className="lp-button lp-button-secondary" onClick={() => void reject(id)}>Reject without changing artifacts</button>
+            <button className="lp-button" disabled={!reviewed[id] || busyAction !== null} aria-busy={busyAction === `approve:${id}`} onClick={() => void approve(id)}>{busyAction === `approve:${id}` ? <><span className="lp-button-spinner" aria-hidden="true" />Applying and rerunning</> : "Approve, apply, and rerun"}</button>
+            <button className="lp-button lp-button-secondary" disabled={busyAction !== null} aria-busy={busyAction === `reject:${id}`} onClick={() => void reject(id)}>{busyAction === `reject:${id}` ? <><span className="lp-button-spinner" aria-hidden="true" />Rejecting</> : "Reject without changing artifacts"}</button>
           </div>
         </article>;
       })}</div>

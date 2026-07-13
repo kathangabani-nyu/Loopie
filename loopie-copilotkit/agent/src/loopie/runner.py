@@ -174,12 +174,30 @@ def _execute_run(
         "tool_receipts": list(final_state.get("tool_receipts") or []),
         "evidence_calls": list(final_state.get("evidence_calls") or []),
         "decision_iterations": int(final_state.get("decision_iterations", 0)),
+        "model_action": final_state.get("model_action", action),
+        "policy_enforced": bool(final_state.get("policy_enforced", False)),
+        "policy_overrode_action": bool(final_state.get("policy_overrode_action", False)),
+        "policy_enforced_by": list(final_state.get("policy_enforced_by", [])),
     }
     if oracle_action is not None:
         run["oracle_action"] = oracle_action
     weave_evidence = current_weave_call_evidence()
     if weave_evidence:
         run["weave"] = weave_evidence
+    from src.loopie.reliability.scorers import score_layers
+
+    golden_annotation = manifest.evaluation_snapshot
+    if golden_annotation is not None:
+        golden_annotation = {
+            **golden_annotation,
+            **dict(golden_annotation.get("expected_metadata") or {}),
+            "neighbors": list(golden_annotation.get("declared_neighbors") or []),
+        }
+    run["correctness"] = score_layers(
+        run,
+        ticket,
+        golden_annotation=golden_annotation,
+    )
     redis.xadd("swarm", {"event": "run_completed", "case_id": ticket["case_id"], "action": action})
     return run
 

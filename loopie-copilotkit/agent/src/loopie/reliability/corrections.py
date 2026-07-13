@@ -164,6 +164,7 @@ def prepare_correction(
     )
     prepared = {
         **correction,
+        "status": "proposed" if shadow_passed else "shadow_failed",
         "artifact_key": artifact_key,
         "base_artifact_version": base_version,
         "candidate_value": candidate,

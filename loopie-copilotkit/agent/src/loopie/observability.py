@@ -132,6 +132,8 @@ def _run_trace_view(run: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(call, Mapping)
     ]
     audit = run.get("audit_payload") or {}
+    correctness = run.get("correctness") or {}
+    golden = correctness.get("golden") or {}
     return {
         "run_id": run.get("run_id"),
         "case_id": run.get("case_id"),
@@ -139,6 +141,9 @@ def _run_trace_view(run: Mapping[str, Any]) -> dict[str, Any]:
         "correction_id": run.get("correction_id"),
         "parent_run_id": run.get("parent_run_id"),
         "action": run.get("action"),
+        "model_action": run.get("model_action"),
+        "policy_overrode_action": bool(run.get("policy_overrode_action", False)),
+        "policy_enforced_by": list(run.get("policy_enforced_by") or []),
         "oracle_action": run.get("oracle_action"),
         "mode": run.get("mode"),
         "decided_by": run.get("decided_by"),
@@ -152,6 +157,14 @@ def _run_trace_view(run: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(audit, Mapping)
         else [],
         "policy_checked": bool(run.get("policy_checked", False)),
+        "evaluation_status": (
+            "passed" if correctness.get("passed") is True
+            else "failed" if correctness.get("passed") is False
+            else "pending"
+        ),
+        "policy_passed": (correctness.get("policy") or {}).get("passed"),
+        "structural_passed": (correctness.get("structural") or {}).get("passed"),
+        "golden_passed": golden.get("passed") if golden else None,
         "memory_version": run.get("memory_version"),
         "transitions": run.get("transitions"),
         "max_transitions": run.get("max_transitions"),

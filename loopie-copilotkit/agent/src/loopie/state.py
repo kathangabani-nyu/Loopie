@@ -16,6 +16,10 @@ class LoopieState(TypedDict, total=False):
     decision_iterations: int
     transitions: int
     action: str | None
+    model_action: str | None
+    policy_enforced: bool
+    policy_overrode_action: bool
+    policy_enforced_by: list[str]
     narration: dict[str, str]
     trace: list[dict[str, Any]]
     policy_checked: bool

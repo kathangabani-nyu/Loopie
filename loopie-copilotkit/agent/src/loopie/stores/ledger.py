@@ -374,7 +374,7 @@ class Ledger:
             "shadow_passed": shadow_passed,
             "shadow_eval_run_id": shadow_eval_run_id,
             "project_id": project_id,
-            "status": "proposed",
+            "status": "proposed" if shadow_passed else "shadow_failed",
         }
         try:
             with self._connect() as conn:
@@ -388,9 +388,24 @@ class Ledger:
                         (%(id)s, %(project_id)s, %(failure_id)s, %(case_id)s, %(category)s, %(proposal)s::jsonb,
                          %(type)s, %(payload)s::jsonb, %(base_artifact_version)s,
                          %(diff)s::jsonb, %(blast_radius)s::jsonb, %(shadow_eval_run_id)s,
-                         %(shadow_passed)s, 'proposed', %(proposed_by)s, %(model)s,
+                         %(shadow_passed)s, %(status)s, %(proposed_by)s, %(model)s,
                          %(idempotency_key)s)
-                    ON CONFLICT (id) DO NOTHING
+                    ON CONFLICT (id) DO UPDATE SET
+                        failure_id = EXCLUDED.failure_id,
+                        failure_case = EXCLUDED.failure_case,
+                        category = EXCLUDED.category,
+                        proposal = EXCLUDED.proposal,
+                        kind = EXCLUDED.kind,
+                        payload = EXCLUDED.payload,
+                        base_artifact_version = EXCLUDED.base_artifact_version,
+                        diff = EXCLUDED.diff,
+                        blast_radius = EXCLUDED.blast_radius,
+                        shadow_eval_run_id = EXCLUDED.shadow_eval_run_id,
+                        shadow_passed = EXCLUDED.shadow_passed,
+                        status = EXCLUDED.status,
+                        proposed_by = EXCLUDED.proposed_by,
+                        model = EXCLUDED.model
+                    WHERE loopie.corrections.status IN ('proposed', 'shadow_failed')
                     """,
                     {
                         **row,
@@ -412,8 +427,8 @@ class Ledger:
                 )
                 if correction.get("failure_id"):
                     conn.execute(
-                        "UPDATE loopie.failures SET status = 'proposed', updated_at = NOW() WHERE id = %s",
-                        (correction["failure_id"],),
+                        "UPDATE loopie.failures SET status = %s, updated_at = NOW() WHERE id = %s",
+                        ("proposed" if shadow_passed else "open", correction["failure_id"]),
                     )
                 conn.commit()
             return

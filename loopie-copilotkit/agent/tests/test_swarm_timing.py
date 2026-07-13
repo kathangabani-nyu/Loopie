@@ -7,7 +7,7 @@ EXPECTED_RECEIPT_KEYS = {
     "triage": {"classification", "security_flag", "amount", "tier"},
     "context": {"policy_version", "freshness", "artifact_hash", "approved_rules_loaded", "routing_rules_count"},
     "resolution": {"iterations", "evidence_calls", "proposed_tools", "action"},
-    "execution": {"proposed_tools", "authorized_tools", "blocked_tools", "executed_tools", "policy_result", "policy_read_sets", "action"},
+    "execution": {"proposed_tools", "policy_required_tools", "authorized_tools", "blocked_tools", "executed_tools", "policy_result", "policy_read_sets", "action"},
     "evaluator": {"scorers_passed", "scorers_total", "audit_event_id"},
 }
 

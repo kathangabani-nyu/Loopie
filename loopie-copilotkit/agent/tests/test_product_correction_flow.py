@@ -151,6 +151,26 @@ def test_rejection_records_decision_without_mutating_artifacts() -> None:
     _run(scenario())
 
 
+def test_failed_shadow_is_a_terminal_gate_result_not_an_approval_proposal() -> None:
+    redis = MemoryRedis()
+    ledger = MemoryLedger()
+    seed_baseline(redis=redis, ledger=ledger)
+    correction = propose("missing_guard", case_id="security-shadow-fail")
+
+    prepared = prepare_correction(
+        correction,
+        ledger=ledger,
+        shadow_passed=False,
+        shadow_eval_run_id="shadow-fail",
+    )
+
+    assert prepared["status"] == "shadow_failed"
+    stored = ledger.get_correction(prepared["id"])
+    assert stored is not None
+    assert stored["status"] == "shadow_failed"
+    assert stored["shadow_passed"] is False
+
+
 def test_generated_correction_union_rejects_unsafe_policy_paths() -> None:
     with pytest.raises(ValidationError):
         validate_generated_correction(

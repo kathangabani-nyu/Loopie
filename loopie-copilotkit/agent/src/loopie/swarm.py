@@ -221,6 +221,7 @@ def execution_node(state: LoopieState) -> dict[str, Any]:
     }
     receipt = {
         "proposed_tools": [item["name"] for item in evidence["proposed_tools"]],
+        "policy_required_tools": [item["name"] for item in evidence["policy_required_tools"]],
         "authorized_tools": [item["name"] for item in evidence["authorized_tools"]],
         "blocked_tools": evidence["blocked_tools"],
         "denied_proposals": evidence["denied_proposals"],
@@ -228,7 +229,11 @@ def execution_node(state: LoopieState) -> dict[str, Any]:
         "executed_tools": [item["name"] for item in evidence["executed_tools"]],
         "policy_result": evidence["policy_result"],
         "policy_read_sets": policy_read_sets,
-        "action": action,
+        "action": evidence["action"],
+        "model_action": evidence["model_action"],
+        "policy_enforced": evidence["policy_enforced"],
+        "policy_overrode_action": evidence["policy_overrode_action"],
+        "policy_enforced_by": evidence["policy_enforced_by"],
         "audit_event_id": None,
     }
     audit_payload = {
@@ -238,7 +243,11 @@ def execution_node(state: LoopieState) -> dict[str, Any]:
         "decided_by": state.get("decided_by", "oracle"),
     }
     return {
-        "action": action,
+        "action": evidence["action"],
+        "model_action": evidence["model_action"],
+        "policy_enforced": evidence["policy_enforced"],
+        "policy_overrode_action": evidence["policy_overrode_action"],
+        "policy_enforced_by": evidence["policy_enforced_by"],
         "tool_calls": evidence["proposed_tools"],
         "audit_event_id": None,
         "audit_payload": audit_payload,

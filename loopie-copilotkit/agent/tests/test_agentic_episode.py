@@ -146,3 +146,117 @@ def test_action_effect_contract_blocks_contradictory_refund():
     assert result["authorized_tools"] == []
     assert result["denied_proposals"] == ["refund_tool"]
     assert result["executed_tools"] == []
+
+
+def test_approved_escalation_policy_deterministically_overrides_model_action():
+    artifacts = _artifacts()
+    artifacts["policy_rules"] = [
+        {
+            "schema_version": "1",
+            "rule_id": "security_flag_requires_escalation",
+            "version": 1,
+            "name": "Security flag requires escalation",
+            "status": "approved",
+            "when": {
+                "kind": "predicate",
+                "path": "ticket.security_flag",
+                "operator": "eq",
+                "value": True,
+            },
+            "effects": [
+                {
+                    "kind": "escalate_to",
+                    "action": "escalate_security",
+                    "message": "Escalate security-flagged tickets.",
+                }
+            ],
+        }
+    ]
+
+    result = authorize_and_execute(
+        {"case_id": "policy-override-1", "security_flag": True},
+        artifacts,
+        "deny_refund_offer_credit",
+        [{"name": "escalate_tool", "args": {}}],
+    )
+
+    assert result["model_action"] == "deny_refund_offer_credit"
+    assert result["action"] == "escalate_security"
+    assert result["policy_overrode_action"] is True
+    assert result["policy_enforced_by"] == ["security_flag_requires_escalation"]
+    assert [call["name"] for call in result["policy_required_tools"]] == []
+    assert [call["name"] for call in result["executed_tools"]] == ["escalate_tool"]
+
+
+def test_approved_escalation_policy_supplies_the_required_effect_tool():
+    artifacts = _artifacts()
+    artifacts["policy_rules"] = [
+        {
+            "schema_version": "1",
+            "rule_id": "security_flag_requires_escalation",
+            "version": 1,
+            "name": "Security flag requires escalation",
+            "status": "approved",
+            "when": {
+                "kind": "predicate",
+                "path": "ticket.security_flag",
+                "operator": "eq",
+                "value": True,
+            },
+            "effects": [
+                {
+                    "kind": "escalate_to",
+                    "action": "escalate_security",
+                    "message": "Escalate security-flagged tickets.",
+                }
+            ],
+        }
+    ]
+
+    result = authorize_and_execute(
+        {"case_id": "policy-tool-1", "security_flag": True},
+        artifacts,
+        "approve_refund",
+        [{"name": "refund_tool", "args": {}}],
+    )
+
+    assert result["action"] == "escalate_security"
+    assert result["denied_proposals"] == ["refund_tool"]
+    assert [call["name"] for call in result["policy_required_tools"]] == ["escalate_tool"]
+    assert [call["name"] for call in result["executed_tools"]] == ["escalate_tool"]
+
+
+def test_episode_prompt_contains_message_free_approved_policy_constraints():
+    artifacts = _artifacts()
+    artifacts["policy_rules"] = [
+        {
+            "schema_version": "1",
+            "rule_id": "security_flag_requires_escalation",
+            "version": 1,
+            "name": "Security flag requires escalation",
+            "status": "approved",
+            "when": {
+                "kind": "predicate",
+                "path": "ticket.security_flag",
+                "operator": "eq",
+                "value": True,
+            },
+            "effects": [
+                {
+                    "kind": "escalate_to",
+                    "action": "escalate_security",
+                    "message": "UNTRUSTED POLICY PROSE",
+                }
+            ],
+        }
+    ]
+
+    messages = LLMGateway._build_episode_messages(
+        {"case_id": "prompt-1", "security_flag": True},
+        tuple(artifacts["action_taxonomy"]),
+        artifacts,
+    )
+
+    assert "security_flag_requires_escalation" in messages[1].content
+    assert '"action": "escalate_security"' in messages[1].content
+    assert "UNTRUSTED POLICY PROSE" not in messages[1].content
