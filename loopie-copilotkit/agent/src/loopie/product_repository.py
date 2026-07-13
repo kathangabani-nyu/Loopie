@@ -108,6 +108,7 @@ def ticket_to_agent_input(ticket: dict[str, Any]) -> dict[str, Any]:
 
 class ProductRepository(Protocol):
     async def get_project(self, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any] | None: ...
+    async def reset_demo_state(self) -> None: ...
     async def create_ticket(self, *, external_id: str, subject: str, body: str, channel: str, customer_ref: str | None, facts: dict[str, Any], metadata: dict[str, Any], tags: list[str], project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any]: ...
     async def list_tickets(self, *, project_id: str = DEFAULT_PROJECT_ID, limit: int = 100) -> list[dict[str, Any]]: ...
     async def get_ticket(self, ticket_id: str, *, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any] | None: ...
@@ -208,6 +209,9 @@ class PostgresProductRepository:
                 result = await cursor.execute("SELECT * FROM loopie.projects WHERE id = %s", (project_id,))
                 row = await result.fetchone()
                 return dict(row) if row else None
+
+    async def reset_demo_state(self) -> None:
+        """Ledger.reset owns the shared Postgres transaction; no memory mirror exists here."""
 
     async def create_ticket(
         self,
@@ -1016,6 +1020,15 @@ class MemoryProductRepository:
             "settings": {},
         }
 
+    async def reset_demo_state(self) -> None:
+        """Mirror the durable reset without deleting seeded ticket inputs."""
+
+        self.runs.clear()
+        self.manifests.clear()
+        self.jobs.clear()
+        self.failures.clear()
+        self.triage_items.clear()
+
     async def create_ticket(self, *, external_id: str, subject: str, body: str, channel: str = "api", customer_ref: str | None = None, facts: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None, tags: list[str] | None = None, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any]:
         existing = next((item for item in self.tickets.values() if item["project_id"] == project_id and item["external_id"] == external_id), None)
         ticket_id = existing["id"] if existing else str(uuid.uuid4())
@@ -1098,7 +1111,22 @@ class MemoryProductRepository:
         return sorted(rows, key=lambda row: row["created_at"], reverse=True)[:limit]
 
     async def list_failures(self, *, project_id: str = DEFAULT_PROJECT_ID, limit: int = 100) -> list[dict[str, Any]]:
-        rows = [dict(row) for row in self.failures.values() if row["project_id"] == project_id]
+        rows = []
+        for failure in self.failures.values():
+            if failure["project_id"] != project_id:
+                continue
+            run = self.runs.get(str(failure["run_id"])) or {}
+            ticket = self.tickets.get(str(failure["ticket_id"])) or {}
+            rows.append(
+                {
+                    **failure,
+                    "run_id": run.get("id", failure["run_id"]),
+                    "ticket_id": ticket.get("id", failure["ticket_id"]),
+                    "decision": run.get("decision"),
+                    "scores": failure.get("diagnosis") or {},
+                    "external_id": ticket.get("external_id"),
+                }
+            )
         return sorted(rows, key=lambda row: row["created_at"], reverse=True)[:limit]
 
     async def get_failure(self, failure_id: str, *, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, Any] | None:

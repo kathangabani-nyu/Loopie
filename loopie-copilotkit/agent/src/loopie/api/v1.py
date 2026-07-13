@@ -32,7 +32,51 @@ def _runtime(request: Request) -> RuntimeServices:
 
 class DemoStart(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    confirm: Literal["START_DEMO"]
+
+
+class DemoReset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     confirm: Literal["RESET_DEMO"]
+
+
+async def _demo_runs(runtime: RuntimeServices) -> list[dict[str, Any]]:
+    return await runtime.repository.list_runs(limit=500)
+
+
+async def _demo_ticket(runtime: RuntimeServices) -> dict[str, Any]:
+    ticket = next(
+        (
+            item for item in await runtime.repository.list_tickets(limit=500)
+            if item.get("external_id") == "security_001"
+        ),
+        None,
+    )
+    if ticket is None:
+        raise HTTPException(status_code=503, detail="security_001 fixture is not seeded")
+    return ticket
+
+
+def _reject_active_demo_runs(runs: list[dict[str, Any]]) -> None:
+    if any(run.get("status") in {"queued", "running"} for run in runs):
+        raise HTTPException(status_code=409, detail="wait for active runs before changing the demo")
+
+
+@router.post("/demo/reset")
+async def reset_golden_demo(body: DemoReset, request: Request) -> Any:
+    runtime = _runtime(request)
+    runs = await _demo_runs(runtime)
+    _reject_active_demo_runs(runs)
+    await _demo_ticket(runtime)
+    await asyncio.to_thread(runtime.stores.redis.flush_loopie_keys)
+    await asyncio.to_thread(runtime.stores.ledger.reset)
+    await runtime.repository.reset_demo_state()
+    await asyncio.to_thread(seed_baseline, redis=runtime.stores.redis, ledger=runtime.stores.ledger)
+    return {
+        "reset": True,
+        "scenario": "security_001",
+        "status": "ready",
+    }
 
 
 @router.post("/demo/start", status_code=status.HTTP_202_ACCEPTED)
@@ -53,24 +97,11 @@ async def start_golden_demo(body: DemoStart, request: Request) -> Any:
                 "LOOPIE_LIVE_CONFIRMED=1, and configure an enabled provider"
             ),
         )
-    active = [
-        run for run in await runtime.repository.list_runs(limit=500)
-        if run.get("status") in {"queued", "running"}
-    ]
-    if active:
-        raise HTTPException(status_code=409, detail="wait for active runs before resetting the demo")
-    await asyncio.to_thread(runtime.stores.redis.flush_loopie_keys)
-    await asyncio.to_thread(runtime.stores.ledger.reset)
-    await asyncio.to_thread(seed_baseline, redis=runtime.stores.redis, ledger=runtime.stores.ledger)
-    ticket = next(
-        (
-            item for item in await runtime.repository.list_tickets(limit=500)
-            if item.get("external_id") == "security_001"
-        ),
-        None,
-    )
-    if ticket is None:
-        raise HTTPException(status_code=503, detail="security_001 fixture is not seeded")
+    runs = await _demo_runs(runtime)
+    _reject_active_demo_runs(runs)
+    if any(run.get("kind") in {"golden", "patched"} for run in runs):
+        raise HTTPException(status_code=409, detail="reset the demo before starting a new baseline")
+    ticket = await _demo_ticket(runtime)
     queued = await runtime.runs.queue_ticket_run(
         ticket_id=str(ticket["id"]),
         mode="live",

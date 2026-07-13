@@ -32,11 +32,23 @@ export function GoldenDemo() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  async function start() {
-    setBusy(true); setMessage("Restoring the known missing-guard baseline and queuing security_001.");
-    const response = await fetch("/api/loopie/v1/demo/start", {
+  async function reset() {
+    setBusy(true); setMessage("Restoring the known missing-guard baseline without running it.");
+    const response = await fetch("/api/loopie/v1/demo/reset", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({confirm: "RESET_DEMO"}),
+    });
+    const payload = await response.json();
+    setMessage(response.ok ? "Broken baseline restored. Click Start golden demo when you are ready." : payload.detail ?? payload.error ?? "Demo reset failed");
+    await Promise.all([runs.refresh(), failures.refresh(), corrections.refresh()]);
+    setBusy(false);
+  }
+
+  async function start() {
+    setBusy(true); setMessage("Queuing security_001 against the broken baseline.");
+    const response = await fetch("/api/loopie/v1/demo/start", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({confirm: "START_DEMO"}),
     });
     const payload = await response.json();
     setMessage(response.ok ? `Baseline queued: ${payload.run_id}` : payload.detail ?? payload.error ?? "Demo start failed");
@@ -70,7 +82,7 @@ export function GoldenDemo() {
   const failureStatus = String(failure?.status ?? (baselineEvaluation === "failed" ? "recording" : "waiting"));
 
   const stages = [
-    {label: "1. Baseline", status: baselineEvaluation, detail: baseline ? String(baseline.id) : "Reset and run the pinned case"},
+    {label: "1. Baseline", status: baselineEvaluation, detail: baseline ? String(baseline.id) : "Ready for an explicit start"},
     {label: "2. Failure evidence", status: failureStatus, detail: failure ? `${String(failure.category)} · ${String(failure.layer)}` : "Waiting for deterministic checks"},
     {label: "3. Human correction", status: correctionStatus, detail: correction ? `${String(correction.kind)} · shadow ${correction.shadow_passed ? "passed" : "pending"}` : "No artifact change proposed"},
     {label: "4. Patched verification", status: patchedEvaluation, detail: patched ? String(patched.id) : "Approval queues the identical rerun"},
@@ -81,7 +93,7 @@ export function GoldenDemo() {
 
     <section className="lp-card lp-demo-control">
       <div><div className="lp-card-label">Pinned scenario</div><h2>security_001 · security-flagged $12,450 refund</h2><p>Reset deletes prior demo run/evidence state and restores the intentionally missing routing guard. Seeded tickets and golden annotations remain.</p></div>
-      <button className="lp-button" disabled={busy} onClick={() => void start()}>{busy ? "Working…" : baseline ? "Reset demo to broken baseline" : "Start golden demo"}</button>
+      <button className="lp-button" disabled={busy} onClick={() => void (baseline ? reset() : start())}>{busy ? "Working…" : baseline ? "Reset demo to broken baseline" : "Start golden demo"}</button>
       {message ? <div className="lp-demo-message">{message}</div> : null}
     </section>
 

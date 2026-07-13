@@ -153,6 +153,9 @@ def test_golden_run_uses_pinned_annotation_and_records_golden_failure() -> None:
         failure = next(iter(repository.failures.values()))
         assert failure["layer"] == "golden"
         assert failure["category"] == "golden_mismatch"
+        listed = await repository.list_failures()
+        assert listed[0]["external_id"] == "support-1"
+        assert listed[0]["run_id"] == queued["run"]["id"]
 
     _run(scenario())
 
@@ -248,7 +251,71 @@ def test_jsonl_and_csv_document_imports_queue_every_ticket() -> None:
         assert csv_result.json()["accepted"] == 1
 
 
-def test_golden_demo_queues_only_a_live_baseline(monkeypatch) -> None:
+def test_golden_demo_reset_does_not_queue_baseline(monkeypatch) -> None:
+    from src.loopie.api import v1
+
+    class FakeRepository:
+        reset_called = False
+
+        async def list_runs(self, *, limit: int):
+            return []
+
+        async def list_tickets(self, *, limit: int):
+            return [{"id": "ticket-1", "external_id": "security_001"}]
+
+        async def reset_demo_state(self):
+            self.reset_called = True
+
+    class FakeRuns:
+        queued: dict | None = None
+
+        async def queue_ticket_run(self, **kwargs):
+            self.queued = kwargs
+            raise AssertionError("reset must not queue a run")
+
+    class FakeRedis:
+        flushed = False
+
+        def flush_loopie_keys(self):
+            self.flushed = True
+
+    class FakeLedger:
+        reset_called = False
+
+        def reset(self):
+            self.reset_called = True
+
+    seeded = []
+    monkeypatch.setattr(v1, "seed_baseline", lambda **kwargs: seeded.append(kwargs) or {})
+    runs = FakeRuns()
+    redis = FakeRedis()
+    ledger = FakeLedger()
+    repository = FakeRepository()
+    app = FastAPI()
+    app.include_router(router)
+    app.state.runtime = SimpleNamespace(
+        repository=repository,
+        runs=runs,
+        stores=SimpleNamespace(redis=redis, ledger=ledger),
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/api/v1/demo/reset", json={"confirm": "RESET_DEMO"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "reset": True,
+        "scenario": "security_001",
+        "status": "ready",
+    }
+    assert runs.queued is None
+    assert redis.flushed is True
+    assert ledger.reset_called is True
+    assert repository.reset_called is True
+    assert len(seeded) == 1
+
+
+def test_golden_demo_start_queues_without_resetting(monkeypatch) -> None:
     from src.loopie.api import v1
 
     class FakeRepository:
@@ -267,11 +334,11 @@ def test_golden_demo_queues_only_a_live_baseline(monkeypatch) -> None:
 
     class FakeRedis:
         def flush_loopie_keys(self):
-            return None
+            raise AssertionError("start must not reset Redis")
 
     class FakeLedger:
         def reset(self):
-            return None
+            raise AssertionError("start must not reset the ledger")
 
     monkeypatch.setattr(
         v1,
@@ -282,7 +349,11 @@ def test_golden_demo_queues_only_a_live_baseline(monkeypatch) -> None:
             "provider_ready": True,
         },
     )
-    monkeypatch.setattr(v1, "seed_baseline", lambda **_: {})
+    monkeypatch.setattr(
+        v1,
+        "seed_baseline",
+        lambda **_: (_ for _ in ()).throw(AssertionError("start must not reseed artifacts")),
+    )
     runs = FakeRuns()
     app = FastAPI()
     app.include_router(router)
@@ -293,7 +364,7 @@ def test_golden_demo_queues_only_a_live_baseline(monkeypatch) -> None:
     )
 
     with TestClient(app) as client:
-        response = client.post("/api/v1/demo/start", json={"confirm": "RESET_DEMO"})
+        response = client.post("/api/v1/demo/start", json={"confirm": "START_DEMO"})
 
     assert response.status_code == 202
     assert response.json()["mode"] == "live"
@@ -303,6 +374,32 @@ def test_golden_demo_queues_only_a_live_baseline(monkeypatch) -> None:
         "kind": "golden",
         "idempotency_key": "demo:security_001:live:baseline",
     }
+
+
+def test_memory_repository_demo_reset_preserves_seeded_inputs() -> None:
+    async def scenario():
+        repository = MemoryProductRepository()
+        repository.tickets["ticket-1"] = {"id": "ticket-1"}
+        repository.golden_annotations["ticket-1"] = {"expected_action": "escalate_security"}
+        repository.runs["run-1"] = {"id": "run-1"}
+        repository.manifests["manifest-1"] = object()
+        repository.jobs["job-1"] = {"id": "job-1"}
+        repository.failures["failure-1"] = {"id": "failure-1"}
+        repository.triage_items["triage-1"] = {"id": "triage-1"}
+
+        await repository.reset_demo_state()
+
+        assert repository.tickets == {"ticket-1": {"id": "ticket-1"}}
+        assert repository.golden_annotations == {
+            "ticket-1": {"expected_action": "escalate_security"}
+        }
+        assert repository.runs == {}
+        assert repository.manifests == {}
+        assert repository.jobs == {}
+        assert repository.failures == {}
+        assert repository.triage_items == {}
+
+    _run(scenario())
 
 
 def test_golden_demo_rejects_oracle_mode(monkeypatch) -> None:
@@ -326,7 +423,7 @@ def test_golden_demo_rejects_oracle_mode(monkeypatch) -> None:
     )
 
     with TestClient(app) as client:
-        response = client.post("/api/v1/demo/start", json={"confirm": "RESET_DEMO"})
+        response = client.post("/api/v1/demo/start", json={"confirm": "START_DEMO"})
 
     assert response.status_code == 503
     assert "requires live model execution" in response.json()["detail"]
