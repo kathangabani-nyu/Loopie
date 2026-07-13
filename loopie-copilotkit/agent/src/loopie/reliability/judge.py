@@ -26,7 +26,7 @@ class JudgeVerdict(BaseModel):
     ]
     confidence: float = Field(ge=0, le=1)
     rationale: str = Field(min_length=1, max_length=1000)
-    cited_policy_rules: list[str] = Field(default_factory=list, max_length=20)
+    cited_policy_rules: list[str] = Field(max_length=20)
 
 
 @dataclass
@@ -51,7 +51,8 @@ class AdvisoryJudge:
         prompt = (
             "Act as an advisory support-quality reviewer. Do not determine the authoritative "
             "run status. Review semantic fit against only the ticket, decision, and pinned approved "
-            "policies. Flag only material issues.\n\n"
+            "policies. Flag only material issues. Return every response field; cited_policy_rules "
+            "must be an empty list when no approved rule is relevant.\n\n"
             f"ticket: {json.dumps(ticket, sort_keys=True)}\n"
             f"decision: {json.dumps({'action': run.get('action'), 'tool_calls': run.get('tool_calls')}, sort_keys=True)}\n"
             f"approved_policies: {json.dumps((run.get('artifacts_snapshot') or {}).get('policy_rules', []), sort_keys=True)}"

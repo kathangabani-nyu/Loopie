@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
-from src.loopie.policy.compiler import validate_compiled_policy
+from src.loopie.policy.compiler import (
+    validate_compiled_policy,
+    validate_compiled_policy_wire,
+)
 from src.loopie.policy.dsl import evaluate_policy, parse_policy_rule
 from src.loopie.policy.seeds import REFUND_WINDOW_30_DAYS, SECURITY_FLAG_BLOCKS_REFUND
 
@@ -186,6 +191,69 @@ def test_compiled_policy_rejects_action_outside_project_taxonomy():
                     ],
                 },
                 "rationale": "The source text asks for an unsupported action.",
+            },
+            action_taxonomy=["escalate_security"],
+        )
+
+
+def test_compiled_policy_wire_decodes_through_full_policy_validation():
+    compiled = validate_compiled_policy_wire(
+        {
+            "rule_json": json.dumps(
+                {
+                    "rule_id": "compiled_wire_security_rule",
+                    "version": 1,
+                    "name": "Compiled wire security rule",
+                    "status": "approved",
+                    "when": {
+                        "kind": "predicate",
+                        "path": "ticket.security_flag",
+                        "operator": "eq",
+                        "value": True,
+                    },
+                    "effects": [
+                        {
+                            "kind": "escalate_to",
+                            "action": "escalate_security",
+                            "message": "Escalate security-sensitive requests.",
+                        }
+                    ],
+                }
+            ),
+            "rationale": "The source policy requires a security escalation.",
+        },
+        action_taxonomy=["escalate_security"],
+    )
+
+    assert compiled.rule.status == "proposed"
+    assert compiled.rule.when.path == "ticket.security_flag"
+
+
+def test_compiled_policy_wire_rejects_unsafe_decoded_path():
+    with pytest.raises(ValidationError):
+        validate_compiled_policy_wire(
+            {
+                "rule_json": json.dumps(
+                    {
+                        "rule_id": "compiled_wire_unsafe_rule",
+                        "version": 1,
+                        "name": "Compiled wire unsafe rule",
+                        "when": {
+                            "kind": "predicate",
+                            "path": "system.secrets",
+                            "operator": "exists",
+                            "value": True,
+                        },
+                        "effects": [
+                            {
+                                "kind": "escalate_to",
+                                "action": "escalate_security",
+                                "message": "Escalate this ticket.",
+                            }
+                        ],
+                    }
+                ),
+                "rationale": "Unsafe fact paths must still be rejected internally.",
             },
             action_taxonomy=["escalate_security"],
         )

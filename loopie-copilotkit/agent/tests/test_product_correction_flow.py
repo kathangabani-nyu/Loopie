@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -8,7 +9,10 @@ from pydantic import ValidationError
 
 from src.loopie.jobs import MemoryJobStore
 from src.loopie.product_repository import MemoryProductRepository
-from src.loopie.reliability.correction_gen import validate_generated_correction
+from src.loopie.reliability.correction_gen import (
+    validate_generated_correction,
+    validate_generated_correction_wire,
+)
 from src.loopie.reliability.corrections import prepare_correction, propose
 from src.loopie.runner import seed_baseline
 from src.loopie.services.approvals import ApprovalService
@@ -176,6 +180,97 @@ def test_generated_correction_union_rejects_unsafe_policy_paths() -> None:
                         ],
                     },
                 },
+            }
+        )
+
+
+def test_generated_correction_wire_decodes_into_validated_policy_union() -> None:
+    generated = validate_generated_correction_wire(
+        {
+            "kind": "policy_rule",
+            "summary": "Escalate security-flagged refund requests.",
+            "rationale": "Security-sensitive refunds require deterministic escalation.",
+            "policy_rule_json": json.dumps(
+                {
+                    "schema_version": "1",
+                    "rule_id": "generated_security_escalation",
+                    "version": 1,
+                    "name": "Generated security escalation",
+                    "status": "proposed",
+                    "when": {
+                        "kind": "predicate",
+                        "path": "ticket.security_flag",
+                        "operator": "eq",
+                        "value": True,
+                    },
+                    "effects": [
+                        {
+                            "kind": "escalate_to",
+                            "action": "escalate_security",
+                            "message": "Escalate this security-sensitive refund.",
+                        }
+                    ],
+                }
+            ),
+            "memory_key": "",
+            "memory_value": "",
+            "config_key": "",
+            "config_value": 0,
+        }
+    )
+
+    assert generated.correction.kind == "policy_rule"
+    assert generated.correction.rule.when.path == "ticket.security_flag"
+
+
+def test_generated_correction_wire_rejects_unsafe_decoded_policy() -> None:
+    with pytest.raises(ValidationError):
+        validate_generated_correction_wire(
+            {
+                "kind": "policy_rule",
+                "summary": "Reject an unsafe generated policy path.",
+                "rationale": "Decoded rules must still pass the internal Policy DSL.",
+                "policy_rule_json": json.dumps(
+                    {
+                        "rule_id": "unsafe_wire_rule",
+                        "version": 1,
+                        "name": "Unsafe wire rule",
+                        "status": "proposed",
+                        "when": {
+                            "kind": "predicate",
+                            "path": "system.secrets",
+                            "operator": "exists",
+                            "value": True,
+                        },
+                        "effects": [
+                            {
+                                "kind": "escalate_to",
+                                "action": "escalate_security",
+                                "message": "Escalate this ticket.",
+                            }
+                        ],
+                    }
+                ),
+                "memory_key": "",
+                "memory_value": "",
+                "config_key": "",
+                "config_value": 0,
+            }
+        )
+
+
+def test_generated_correction_wire_rejects_cross_kind_fields() -> None:
+    with pytest.raises(ValueError, match="another correction kind"):
+        validate_generated_correction_wire(
+            {
+                "kind": "memory_update",
+                "summary": "Store a durable policy-scoped correction.",
+                "rationale": "The approved memory should guide later decisions.",
+                "policy_rule_json": "{}",
+                "memory_key": "policy:refund:security",
+                "memory_value": "Escalate security-flagged refund requests.",
+                "config_key": "",
+                "config_value": 0,
             }
         )
 
