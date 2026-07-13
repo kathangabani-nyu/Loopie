@@ -166,8 +166,8 @@ flowchart LR
 
     subgraph DAG["LangGraph StateGraph — every node is a @weave.op"]
         T["triage<br/>classify ticket +<br/>security context"] --> C["context<br/>pin manifest artifacts:<br/>routing rules · memory ·<br/>compiled policy"]
-        C --> R["resolution<br/>evidence tools → proposed<br/>action + effects<br/>(oracle in test mode,<br/>bounded LLM in live mode)"]
-        R --> X["execution<br/>deterministic Policy-DSL<br/>authorization, then<br/>simulated effects"]
+        C --> R["resolution<br/>evidence tools → model_action<br/>+ requested effects<br/>(oracle in test mode,<br/>bounded LLM in live mode)"]
+        R --> X["execution<br/>deterministic Policy-DSL<br/>enforcement → final action<br/>+ authorized effects"]
         X --> E["evaluator<br/>deterministic scorers<br/>→ pass/fail"]
     end
 
@@ -190,6 +190,7 @@ Pass/fail is decided by **deterministic scorers only** — no LLM in the authori
 |---|---|
 | `action_match` | Final action matches expected/policy-derived action |
 | `required_policy_checked` | Mandatory policy rules were consulted |
+| `required_policy_rules_present` | Every policy rule required by the golden annotation exists in the pinned run manifest |
 | `unauthorized_tool_call` | No tool outside the authorized surface was invoked |
 | `loop_count_under_limit` | Transition budget respected |
 | `tool_calls_under_budget` | Tool-call budget respected |
@@ -218,10 +219,16 @@ sequenceDiagram
 
     Note over CS: Failure classified → typed proposal
     CS->>CS: Map failure category → typed correction<br/>(routing rule / memory update / policy guard)
-    CS->>CS: Validate: typed union · mutable-key allowlist ·<br/>Policy-DSL compilation where applicable
+    CS->>CS: Generate with strict OpenAI wire schema<br/>(no oneOf / discriminated union in response_format)
+    CS->>CS: Convert + validate typed union · mutable-key allowlist ·<br/>Policy-DSL compilation where applicable
     CS->>SH: Shadow evaluation — rerun failing case against<br/>candidate manifest (no state mutation)
-    SH-->>CS: shadow pass required to proceed
-    CS->>PG: INSERT correction (pending, with candidate diff)
+    alt shadow passes
+        SH-->>CS: proposed — eligible for human review
+        CS->>PG: UPSERT correction with candidate diff + proof
+    else shadow fails
+        SH-->>CS: shadow_failed — keep failure open and retryable
+        CS->>PG: UPSERT failed shadow evidence; do not expose approval action
+    end
 
     H->>AS: approve(correction_id, actor, channel)
     AS->>PG: TRANSACTION: commit correction ·<br/>CAS artifact version bump (v1→v2) ·<br/>approval + audit events · outbox row
@@ -236,7 +243,9 @@ sequenceDiagram
 Guard rails that cannot be bypassed:
 
 - **Typed corrections only.** A correction is a structured object from a closed union — never a free-form patch. Model-generated proposals must survive schema validation, the mutable-key allowlist, and (for policy changes) Policy-DSL compilation.
+- **Strict OpenAI response schema.** The model emits a flat `GeneratedCorrectionWire` object that is valid under OpenAI strict structured outputs. Loopie then converts that wire object into the internal typed correction union and applies kind-specific validation.
 - **Shadow evaluation before review.** The candidate artifact is spliced into a copy of the failing run's manifest and re-evaluated. If the shadow run doesn't pass, the correction never reaches a human.
+- **Failed shadows stay retryable.** A failed shadow is stored as `shadow_failed`, keeps the originating failure open, and never appears approval-ready in the UI.
 - **One approval path.** UI button, CopilotKit HITL interrupt, and REST all converge on the same `ApprovalService`. Approval, compare-and-swap artifact commit, audit event, and outbox insertion happen in one place.
 - **CAS versioning.** Artifact commits are compare-and-swap against the expected prior version, so two racing approvals cannot silently clobber each other. Version history (`artifact_versions`) powers the Time Machine view.
 - **Proof, not promises.** Approving automatically queues a patched rerun of the originating ticket. An improvement claim requires the linked rerun to show a deterministic fail→pass delta — and counterfactual replay confirms neighboring tickets stayed green.
@@ -271,6 +280,7 @@ Weave is wired in as the eval-compare layer, not bolted-on logging:
 - **Traces** — every swarm node, scorer, and diagnosis op is a `@weave.op` with DSN/secret redaction; per-node latency and tool surfaces are inspectable per run.
 - **Eval suites** — `weave.Evaluation` runs the ticket batch against artifact `v1` (baseline) and `v2` (patched) with identical scorers, producing a side-by-side comparison.
 - **Proof columns** — before/after artifact content hashes and the correction id are attached as eval attributes, tying the dashboard back to the Postgres audit trail.
+- **Concise run columns** — `loopie.run` exposes stable top-level outputs for `case_id`, `phase`, `evaluation_status`, `action`, `model_action`, `policy_enforced_by`, `mode`, `decided_by`, `fallback_used`, `wall_clock_ms`, and `run_id`. These are the recommended saved-view columns; no synthesized `summary.weave.latency_ms` field is required.
 - **Deep links** — the cockpit surfaces live trace and baseline-vs-patched eval links.
 
 Weave runs independently of the LLM mode: with `LOOPIE_LLM_MODE=test` you get full observability at zero token cost. Weave is intentionally **never the only evidence store** — the run record in Postgres remains authoritative.
@@ -293,7 +303,7 @@ All routes live under `/api/v1` on the FastAPI service (proxied from the UI as `
 | Policies | `GET /policies`, `POST /policies/compile` | Policy-DSL compilation |
 | Artifacts | `GET /artifacts` | Versioned artifact state (Time Machine) |
 | Events | `GET /events` | SSE stream with `Last-Event-ID` resume |
-| Demo | `POST /demo/start` | Scripted golden-path walkthrough |
+| Demo | `POST /demo/reset`, `POST /demo/start` | Reset only restores the broken baseline; start separately queues the live Golden Demo run |
 
 Authentication: every non-health request requires `Authorization: Bearer <LOOPIE_API_TOKEN>`; the browser never holds this token — only the Auth.js-guarded Next.js proxy does.
 
