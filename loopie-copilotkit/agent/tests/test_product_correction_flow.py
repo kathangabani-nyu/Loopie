@@ -81,6 +81,10 @@ def test_approval_service_applies_projects_and_queues_linked_patched_run() -> No
             shadow_passed=True,
             shadow_eval_run_id="shadow-pass",
         )
+        # Postgres stores the diff and payload, not the convenience proof keys.
+        # Mirror that durable row shape so approval must reconstruct the proof.
+        ledger._memory_corrections[prepared["id"]].pop("before_hash", None)
+        ledger._memory_corrections[prepared["id"]].pop("after_hash", None)
         service = ApprovalService(ledger=ledger, redis=redis, runs=runs)
         result = await service.approve(
             prepared["id"], actor="owner", channel="hitl_chat", note="approved in test"

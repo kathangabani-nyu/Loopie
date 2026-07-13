@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from src.loopie.artifacts import build_artifact_proof
 from src.loopie.observability import compact_approval_output, op
 from src.loopie.reliability.corrections import project_pending_outbox
 from src.loopie.services.runs import RunService
@@ -56,6 +57,17 @@ class ApprovalService:
             ledger=self.ledger,
             redis=self.redis,
         )
+        payload = dict(correction.get("payload") or {})
+        diff = list(correction.get("diff") or [])
+        before_value = committed.get("before_value")
+        if "before_value" not in committed and diff:
+            before_value = diff[0].get("before")
+        after_value = committed.get("value", payload.get("value"))
+        proof = build_artifact_proof(
+            correction_id=correction_id,
+            before_value=before_value,
+            after_value=after_value,
+        )
 
         patched_run: dict[str, Any] | None = None
         failure_id = correction.get("failure_id")
@@ -88,10 +100,9 @@ class ApprovalService:
 
         result = {
             **committed,
+            **proof,
             "approval_decision": "approved",
             "approval_channel": channel,
-            "before_hash": correction.get("before_hash"),
-            "after_hash": correction.get("after_hash"),
             "projected": projected,
             "patched_run": patched_run,
         }
