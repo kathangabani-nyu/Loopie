@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import UUID
 
 from src.loopie.observability import (
     _postprocess_inputs,
@@ -228,7 +229,10 @@ def test_approval_summary_keeps_human_and_artifact_proof_only() -> None:
             "after_hash": "after-1",
             "value": {"secretly_large": "x" * 5_000},
             "projected": [{"artifact_key": "routing:rules"}],
-            "patched_run": {"run_id": "run-2", "parent_run_id": "run-1"},
+            "patched_run": {
+                "run_id": UUID("00000000-0000-0000-0000-000000000002"),
+                "parent_run_id": UUID("00000000-0000-0000-0000-000000000001"),
+            },
         }
     )
 
@@ -242,6 +246,6 @@ def test_approval_summary_keeps_human_and_artifact_proof_only() -> None:
         "after_hash": "after-1",
         "no_op": False,
         "projected_count": 1,
-        "patched_run_id": "run-2",
-        "parent_run_id": "run-1",
+        "patched_run_id": "00000000-0000-0000-0000-000000000002",
+        "parent_run_id": "00000000-0000-0000-0000-000000000001",
     }

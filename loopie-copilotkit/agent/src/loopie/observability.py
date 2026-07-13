@@ -356,6 +356,12 @@ def compact_approval_output(output: Any) -> Any:
     if not isinstance(output, Mapping):
         return _postprocess_output(output)
     patched_run = output.get("patched_run") or {}
+    patched_run_id = (
+        patched_run.get("run_id") if isinstance(patched_run, Mapping) else None
+    )
+    parent_run_id = (
+        patched_run.get("parent_run_id") if isinstance(patched_run, Mapping) else None
+    )
     return {
         "approved": output.get("approval_decision") == "approved",
         "approval_channel": output.get("approval_channel"),
@@ -366,12 +372,8 @@ def compact_approval_output(output: Any) -> Any:
         "after_hash": output.get("after_hash"),
         "no_op": bool(output.get("no_op", False)),
         "projected_count": len(output.get("projected") or []),
-        "patched_run_id": patched_run.get("run_id")
-        if isinstance(patched_run, Mapping)
-        else None,
-        "parent_run_id": patched_run.get("parent_run_id")
-        if isinstance(patched_run, Mapping)
-        else None,
+        "patched_run_id": str(patched_run_id) if patched_run_id is not None else None,
+        "parent_run_id": str(parent_run_id) if parent_run_id is not None else None,
     }
 
 
