@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -17,6 +18,7 @@ from src.loopie.reliability.corrections import prepare_correction, propose
 from src.loopie.runner import seed_baseline
 from src.loopie.services.approvals import ApprovalService
 from src.loopie.services.runs import RunService
+from src.loopie.stores.redis_store import RedisStore
 
 from memory_stores import MemoryLedger, MemoryRedis
 
@@ -305,3 +307,40 @@ def test_redis_product_stream_resumes_after_last_event_id() -> None:
     redis.xadd("product", {"event": "run.finished", "data": {"run_id": "one"}})
     rows = redis.xread("product", last_id=first)
     assert [row["event"] for row in rows] == ["run.finished"]
+
+
+def test_redis_stream_serializes_nested_uuid_values() -> None:
+    class CapturingRedisClient:
+        def __init__(self) -> None:
+            self.payload: dict[str, str] = {}
+
+        def xadd(
+            self,
+            _key: str,
+            payload: dict[str, str],
+            *,
+            maxlen: int,
+            approximate: bool,
+        ) -> str:
+            assert maxlen == 2_000
+            assert approximate is True
+            self.payload = payload
+            return "1-0"
+
+    client = CapturingRedisClient()
+    redis = RedisStore.__new__(RedisStore)
+    redis._prefix = "loopie:test:"
+    redis._client = client
+
+    event_id = redis.xadd(
+        "product",
+        {
+            "event": "correction.approved",
+            "data": {"patched_run": {"run_id": UUID(int=1)}},
+        },
+    )
+
+    assert event_id == "1-0"
+    assert json.loads(client.payload["data"]) == {
+        "patched_run": {"run_id": "00000000-0000-0000-0000-000000000001"}
+    }

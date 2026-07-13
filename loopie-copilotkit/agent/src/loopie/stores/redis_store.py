@@ -97,7 +97,12 @@ class RedisStore:
         }
 
     def xadd(self, stream: str, fields: dict[str, Any]) -> str:
-        payload = {k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) for k, v in fields.items()}
+        payload = {
+            key: json.dumps(value, default=str)
+            if isinstance(value, (dict, list))
+            else str(value)
+            for key, value in fields.items()
+        }
         return self._client.xadd(
             f"{self._prefix}events:{stream}",
             payload,
