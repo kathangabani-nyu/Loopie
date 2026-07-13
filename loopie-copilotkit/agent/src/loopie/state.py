@@ -25,6 +25,7 @@ class LoopieState(TypedDict, total=False):
     mode: str
     decided_by: str
     fallback_used: bool
+    stop_reason: str
     decision_schema_version: str
     prompt_version: str
     cache_hit: bool

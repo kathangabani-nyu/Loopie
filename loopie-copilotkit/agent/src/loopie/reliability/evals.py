@@ -12,10 +12,7 @@ from src.loopie.config import get_settings
 from src.loopie.observability import (
     _postprocess_inputs,
     ensure_weave,
-    extract_weave_eval_id,
     op,
-    weave_eval_browse_url,
-    weave_eval_url,
 )
 from src.loopie.reliability.budget import BudgetTracker
 from src.loopie.reliability.scorers import SCORERS, run_passed, score_run
@@ -230,6 +227,7 @@ def evaluate_suite(
 
     results: list[dict[str, Any]] = []
     weave_eval_id: str | None = None
+    weave_project_url: str | None = None
     weave_eval_error: str | None = None
     weave_eval_used_manual_fallback = False
     runs_by_case: dict[str, dict[str, Any]] = {}
@@ -301,14 +299,21 @@ def evaluate_suite(
         eval_coro = None
         try:
             with weave.attributes(attrs):
-                eval_coro = evaluation.evaluate(predictor)
-                eval_result = asyncio.run(eval_coro)
-            weave_eval_id = extract_weave_eval_id(eval_result)
+                # `.evaluate()` returns only the aggregate summary. `.call()` also
+                # returns the authoritative Weave Call, including the exact UI URL.
+                eval_coro = evaluation.evaluate.call(predictor)
+                _eval_result, eval_call = asyncio.run(eval_coro)
+            weave_eval_id = str(eval_call.id)
+            weave_project_url = str(eval_call.ui_url) if eval_call.ui_url else None
+            if not weave_project_url:
+                raise RuntimeError("Weave evaluation completed without a call UI URL")
             _collect_results()
         except Exception as exc:
             if inspect.iscoroutine(eval_coro):
                 eval_coro.close()
             weave_eval_error = f"{type(exc).__name__}: {exc}"
+            weave_eval_id = None
+            weave_project_url = None
             runs_by_case.clear()
     elif settings.weave_enabled:
         raise RuntimeError(
@@ -338,13 +343,6 @@ def evaluate_suite(
         "fallback_count": fallback_count,
         "no_regression": passed_count == len(results) if label == "patched" else None,
     }
-
-    weave_project_url = None
-    if os.getenv("WANDB_API_KEY"):
-        if weave_eval_id:
-            weave_project_url = weave_eval_url(weave_eval_id)
-        if not weave_project_url:
-            weave_project_url = weave_eval_browse_url(evaluation_name=evaluation_name)
 
     return {
         "label": label,

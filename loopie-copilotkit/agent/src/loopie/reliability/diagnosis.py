@@ -9,7 +9,7 @@ from src.loopie.observability import op
 from src.loopie.reliability.corrections import propose
 
 
-@op("diagnosis.agentic")
+@op("diagnosis.agentic", kind="agent")
 def agentic_diagnosis(failure: dict[str, Any]) -> dict[str, Any]:
     """LLM-driven diagnosis summary when LOOPIE_FULL_AGENTIC=1; never mutates artifacts."""
     settings = get_settings()

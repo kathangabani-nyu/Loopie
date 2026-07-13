@@ -96,6 +96,57 @@ def test_test_run_records_oracle_decision(monkeypatch):
     assert run["fallback_used"] is False
 
 
+def test_live_stop_reason_survives_langgraph_state(monkeypatch):
+    from src.loopie.llm import LLMEpisodeResult, LLMGateway
+    from src.loopie.pipeline import LoopiePipeline
+    from src.loopie.runner import run_ticket, tickets_by_id
+
+    from memory_stores import MemoryLedger, MemoryRedis
+
+    monkeypatch.setenv("LOOPIE_LLM_MODE", "live")
+    get_settings.cache_clear()
+
+    def fake_episode(self, ticket, artifacts, **kwargs):
+        del self, ticket, artifacts, kwargs
+        return LLMEpisodeResult(
+            action="escalate_security",
+            proposed_tools=[{"name": "escalate_tool", "args": {}}],
+            evidence_calls=[],
+            iterations=1,
+            mode="live",
+            model="test-model",
+            decided_by="llm",
+            fallback_used=False,
+            security_guard_observed=True,
+            artifact_basis=["routing:rules"],
+            reason="Pinned security evidence requires review.",
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            estimated_cost_usd=0.001,
+            stop_reason="completed",
+        )
+
+    monkeypatch.setattr(LLMGateway, "decide_episode", fake_episode)
+
+    pipeline = object.__new__(LoopiePipeline)
+    pipeline.redis = MemoryRedis()
+    pipeline.ledger = MemoryLedger()
+    pipeline.state = LoopiePipeline._initial_state()
+    pipeline.seed()
+
+    run = run_ticket(
+        tickets_by_id()["security_001"],
+        redis=pipeline.redis,
+        ledger=pipeline.ledger,
+        mode="live",
+    )
+
+    assert run["mode"] == "live"
+    assert run["decided_by"] == "llm"
+    assert run["stop_reason"] == "completed"
+
+
 def test_pipeline_records_operation_timings_and_export_budget(monkeypatch):
     from src.loopie.pipeline import LoopiePipeline
 

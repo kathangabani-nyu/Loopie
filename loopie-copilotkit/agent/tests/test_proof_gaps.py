@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from types import SimpleNamespace
 
 import pytest
 
@@ -69,12 +70,13 @@ def test_weave_eval_error_is_surfaced_not_silent(monkeypatch):
     get_settings.cache_clear()
     monkeypatch.setattr("src.loopie.reliability.evals.ensure_weave", lambda: None)
 
+    class StubEvaluateOp:
+        async def call(self, _predictor):
+            return {}, None
+
     class StubEvaluation:
         def __init__(self, **_kwargs):
-            pass
-
-        async def evaluate(self, _predictor):
-            return None
+            self.evaluate = StubEvaluateOp()
 
     monkeypatch.setattr("weave.Evaluation", StubEvaluation)
     monkeypatch.setattr("weave.attributes", lambda _attrs: nullcontext())
@@ -93,6 +95,73 @@ def test_weave_eval_error_is_surfaced_not_silent(monkeypatch):
     assert "weave evaluation unavailable" in result["weave_eval_error"]
     assert result["weave_eval_id"] is None
     assert result["results"] == []
+
+
+def test_weave_eval_uses_authoritative_call_url(monkeypatch):
+    monkeypatch.setenv("LOOPIE_WEAVE_ENABLED", "true")
+    monkeypatch.setenv("WANDB_API_KEY", "test-key")
+    monkeypatch.setenv("WANDB_ENTITY", "loopie-team")
+    get_settings.cache_clear()
+    monkeypatch.setattr("src.loopie.reliability.evals.ensure_weave", lambda: True)
+    monkeypatch.setattr("src.loopie.reliability.evals._build_weave_scorers", lambda: [])
+
+    def fake_predictor(ctx):
+        def predict(ticket, artifact_version):
+            run = {
+                "case_id": ticket["case_id"],
+                "action": ticket.get("expected_action"),
+                "oracle_action": ticket.get("expected_action"),
+                "mode": "test",
+                "tool_calls": [],
+                "transitions": 1,
+                "max_transitions": 6,
+                "policy_checked": True,
+                "memory_version": ticket.get("expected_memory_version", 2),
+                "artifacts_snapshot": {},
+            }
+            ctx["runs_by_case"][ticket["case_id"]] = run
+            return run
+
+        return predict
+
+    monkeypatch.setattr(
+        "src.loopie.reliability.evals._build_weave_predictor", fake_predictor
+    )
+
+    class StubEvaluateOp:
+        def __init__(self, evaluation):
+            self.evaluation = evaluation
+
+        async def call(self, predictor):
+            for row in self.evaluation.dataset:
+                predictor(
+                    ticket=row["ticket"], artifact_version=row["artifact_version"]
+                )
+            return {}, SimpleNamespace(
+                id="call-123",
+                ui_url="https://wandb.ai/loopie-team/loopie/weave/calls/call-123",
+            )
+
+    class StubEvaluation:
+        def __init__(self, **kwargs):
+            self.dataset = kwargs["dataset"]
+            self.evaluate = StubEvaluateOp(self)
+
+    monkeypatch.setattr("weave.Evaluation", StubEvaluation)
+    monkeypatch.setattr("weave.attributes", lambda _attrs: nullcontext())
+
+    redis = MemoryRedis()
+    ledger = MemoryLedger()
+    seed_baseline(redis=redis, ledger=ledger)
+    result = evaluate_suite(
+        label="baseline", redis=redis, ledger=ledger, limit=2, mode="test"
+    )
+
+    assert result["weave_eval_error"] is None
+    assert result["weave_eval_id"] == "call-123"
+    assert result["weave_project_url"] == (
+        "https://wandb.ai/loopie-team/loopie/weave/calls/call-123"
+    )
 
 
 def test_weave_tracing_enabled_in_test_mode(monkeypatch):

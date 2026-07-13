@@ -9,7 +9,7 @@ from typing import Any
 
 from src.loopie.config import get_settings, normalize_llm_mode
 from src.loopie.decide import decide_tool_calls
-from src.loopie.observability import current_weave_call_evidence, ensure_weave, op
+from src.loopie.observability import compact_run_output, current_weave_call_evidence, ensure_weave, op
 from src.loopie.llm import DECISION_PROMPT_VERSION, DECISION_SCHEMA_VERSION
 from src.loopie.manifests import ManifestReader, RunManifest, build_run_manifest
 from src.loopie.reliability.budget import BudgetTracker
@@ -48,7 +48,7 @@ def tickets_by_id(limit: int | None = None) -> dict[str, dict[str, Any]]:
     return {t["case_id"]: t for t in load_tickets(limit=limit)}
 
 
-@op("loopie.run", call_display_name=_run_display_name)
+@op("loopie.run", call_display_name=_run_display_name, postprocess_output=compact_run_output, kind="agent")
 def _execute_run(
     ticket: dict[str, Any],
     *,
@@ -150,7 +150,10 @@ def _execute_run(
         "mode": mode,
         "decided_by": final_state.get("decided_by", "oracle"),
         "fallback_used": bool(final_state.get("fallback_used", False)),
-        "stop_reason": final_state.get("stop_reason", "test"),
+        "stop_reason": final_state.get(
+            "stop_reason",
+            "test" if mode == "test" else "missing_stop_reason",
+        ),
         "decision_schema_version": final_state.get("decision_schema_version"),
         "prompt_version": final_state.get("prompt_version"),
         "cache_hit": bool(final_state.get("cache_hit", False)),

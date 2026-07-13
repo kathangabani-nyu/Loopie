@@ -13,7 +13,7 @@ from src.loopie.taxonomy import allowed_effect_tools, normalize_action
 _SECURITY_GUARD = "security_flag_blocks_refund"
 
 
-@op("tool.crm_lookup")
+@op("tool.crm_lookup", kind="tool")
 def crm_lookup(context: dict[str, Any]) -> dict[str, Any]:
     ticket = context.get("ticket") or {}
     tier = ticket.get("customer_tier", "standard")
@@ -26,7 +26,7 @@ def crm_lookup(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@op("tool.risk_score_lookup")
+@op("tool.risk_score_lookup", kind="tool")
 def risk_score_lookup(context: dict[str, Any]) -> dict[str, Any]:
     ticket = context.get("ticket") or {}
     artifacts = context.get("artifacts") or {}
@@ -49,7 +49,7 @@ def risk_score_lookup(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@op("tool.policy_version_read")
+@op("tool.policy_version_read", kind="tool")
 def policy_version_read(mem: dict[str, Any] | None, key: str = "policy:refund_window") -> dict[str, Any]:
     mem = mem or {"value": "", "version": 1}
     version = int(mem.get("version", 1))
@@ -103,7 +103,7 @@ def evaluate_decision_policies(
     }
 
 
-@op("tool.refund_tool")
+@op("tool.refund_tool", kind="tool")
 def refund_tool(context: dict[str, Any]) -> dict[str, Any]:
     ticket = context.get("ticket") or {}
     amount = ticket.get("amount")
@@ -117,7 +117,7 @@ def refund_tool(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@op("tool.escalate_security")
+@op("tool.escalate_security", kind="tool")
 def escalate_security(context: dict[str, Any]) -> dict[str, Any]:
     ticket = context.get("ticket") or {}
     return {

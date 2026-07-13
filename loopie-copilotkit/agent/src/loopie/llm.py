@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from src.loopie.artifacts import artifact_content_hash, artifact_value_hash
 from src.loopie.config import get_settings
-from src.loopie.observability import op
+from src.loopie.observability import compact_episode_output, op
 from src.loopie.pricing import estimate_text_cost
 from src.loopie.providers import (
     ProviderConfig,
@@ -223,7 +223,7 @@ class LLMGateway:
             model = model.bind(model_kwargs={"seed": self.settings.llm_seed})
         return model
 
-    @op("gateway.decide_episode")
+    @op("gateway.decide_episode", postprocess_output=compact_episode_output, kind="agent")
     def decide_episode(
         self,
         ticket: dict[str, Any],

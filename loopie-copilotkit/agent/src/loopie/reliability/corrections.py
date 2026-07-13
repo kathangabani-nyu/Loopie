@@ -10,7 +10,7 @@ from typing import Any
 from src.loopie.artifacts import build_artifact_proof
 from src.loopie.llm import DECISION_PROMPT_VERSION, DECISION_SCHEMA_VERSION
 from src.loopie.manifests import ArtifactSnapshot, RunManifest, build_run_manifest
-from src.loopie.observability import op
+from src.loopie.observability import compact_shadow_output, op
 from src.loopie.reliability.scorers import score_layers
 from src.loopie.runner import run_ticket
 from src.loopie.stores.ledger import Ledger
@@ -226,7 +226,12 @@ def _shadow_display_name(call: Any) -> str:
     return f"Shadow gate · {correction.get('case_id', 'correction')}"
 
 
-@op("golden_demo.shadow_gate", call_display_name=_shadow_display_name)
+@op(
+    "golden_demo.shadow_gate",
+    call_display_name=_shadow_display_name,
+    postprocess_output=compact_shadow_output,
+    kind="agent",
+)
 def shadow_evaluate_correction(
     correction: dict[str, Any],
     *,
@@ -357,7 +362,7 @@ def project_pending_outbox(*, ledger: Ledger, redis: RedisStore, limit: int = 10
     return projected
 
 
-@op("corrections.apply")
+@op("corrections.apply", kind="tool")
 def apply(
     correction: dict[str, Any],
     *,
