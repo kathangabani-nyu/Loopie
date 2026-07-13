@@ -62,12 +62,9 @@ def flatten_correctness(correctness: dict[str, Any]) -> dict[str, bool]:
     if correctness.get("golden") is not None:
         scores["golden_passed"] = bool(golden.get("passed"))
     for name, value in (structural.get("scores") or {}).items():
-        scores[f"structural.{name}"] = bool(value)
+        scores[f"structural_{name}"] = bool(value)
     for name, value in (golden.get("scores") or {}).items():
-        scores[f"golden.{name}"] = bool(value)
-    for rule in policy.get("rules") or []:
-        if rule.get("applies"):
-            scores[f"policy.{rule.get('rule_id', 'unknown')}"] = bool(rule.get("passed"))
+        scores[f"golden_{name}"] = bool(value)
     return scores
 
 
@@ -76,14 +73,14 @@ NATIVE_SCORER_NAMES = [
     "policy_passed",
     "structural_passed",
     "golden_passed",
-    "structural.action_in_taxonomy",
-    "structural.loop_count_under_limit",
-    "structural.tool_calls_under_budget",
-    "structural.production_decision_completed",
-    "golden.action_match",
-    "golden.required_policy_checked",
-    "golden.memory_version_correct",
-    "golden.required_policy_rules_present",
+    "structural_action_in_taxonomy",
+    "structural_loop_count_under_limit",
+    "structural_tool_calls_under_budget",
+    "structural_production_decision_completed",
+    "golden_action_match",
+    "golden_required_policy_checked",
+    "golden_memory_version_correct",
+    "golden_required_policy_rules_present",
 ]
 
 

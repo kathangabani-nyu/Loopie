@@ -54,7 +54,7 @@ def test_native_evaluation_session_records_existing_prediction_without_rerun() -
         session.record(
             prediction,
             output={"action": "escalate_security"},
-            scores={"passed": False, "golden.required_policy_rules_present": False},
+            scores={"passed": False, "golden_required_policy_rules_present": False},
         )
     evidence = session.finish({"total": 1, "passed": 0})
 
@@ -62,7 +62,7 @@ def test_native_evaluation_session_records_existing_prediction_without_rerun() -
     assert logger.prediction.output == {"action": "escalate_security"}
     assert logger.prediction.scores == {
         "passed": False,
-        "golden.required_policy_rules_present": False,
+        "golden_required_policy_rules_present": False,
     }
     assert logger.prediction.finished is True
     assert logger.summary == {"total": 1, "passed": 0}
@@ -105,8 +105,8 @@ def test_native_evaluation_payloads_are_stable_compact_and_deterministic() -> No
         "policy_passed": True,
         "structural_passed": True,
         "golden_passed": False,
-        "structural.action_in_taxonomy": True,
-        "golden.required_policy_rules_present": False,
+        "structural_action_in_taxonomy": True,
+        "golden_required_policy_rules_present": False,
     }
 
     output = compact_evaluation_output(
