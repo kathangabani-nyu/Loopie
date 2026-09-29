@@ -227,7 +227,7 @@ sequenceDiagram
         CS->>PG: UPSERT correction with candidate diff + proof
     else shadow fails
         SH-->>CS: shadow_failed — keep failure open and retryable
-        CS->>PG: UPSERT failed shadow evidence; do not expose approval action
+        CS->>PG: UPSERT failed shadow evidence<br/>do not expose approval action
     end
 
     H->>AS: approve(correction_id, actor, channel)
